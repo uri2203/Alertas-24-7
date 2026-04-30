@@ -653,7 +653,7 @@ const MC = {
 
 let curMode = 'scalp', curTF = '5m', curSym = 'BTCUSDT';
 let CC = {}, chart, cSer, vSer, ws;
-let xSer = [], pLines = [], ewLines = [], ewLabels = [];
+let xSer = [], pLines = [], ewLines = [], ewLabels = [], ewMarkersBuf = [];
 let SH = { pv:true, fb:true, hr:true, ew:true, sess:true, vpoc:true };
 let wsRD = 1000, wsT = null;
 let curSig = { signal:null, entry:null, sl:null, t1:null, t2:null };
@@ -906,10 +906,14 @@ function liveUpdateMacro(price) {
 //  CHART
 // ═══════════════════════════════════════════════════════════════
 function initChart() {
-  safe(() => {
+  // doble rAF: garantiza que el grid CSS ya tiene dimensiones reales antes de crear el chart
+  requestAnimationFrame(() => requestAnimationFrame(() => safe(() => {
     const wrap = document.getElementById('CW'); wrap.innerHTML = '';
+    wrap.style.minHeight = '240px';
+    const w = Math.max(200, wrap.clientWidth);
+    const h = Math.max(240, wrap.clientHeight);
     chart = LightweightCharts.createChart(wrap, {
-      width: wrap.clientWidth, height: wrap.clientHeight || 230,
+      width: w, height: h,
       layout: { background: { type:'solid', color:'transparent' }, textColor: 'rgba(150,160,180,.8)' },
       grid: { vertLines: { color:'rgba(255,255,255,.03)' }, horzLines: { color:'rgba(255,255,255,.03)' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -924,9 +928,9 @@ function initChart() {
     vSer = chart.addHistogramSeries({ priceScaleId:'vol', scaleMargins:{top:.85,bottom:0} });
     chart.priceScale('vol').applyOptions({ scaleMargins:{top:.85,bottom:0} });
     new ResizeObserver(() => {
-      safe(() => { if (chart) { const w = wrap.clientWidth, h = wrap.clientHeight; if (w>50 && h>50) chart.applyOptions({width:w,height:h}); } });
+      safe(() => { if (chart) { const rw = wrap.clientWidth, rh = wrap.clientHeight; if (rw>50 && rh>50) chart.applyOptions({width:rw,height:rh}); } });
     }).observe(wrap);
-  });
+  })));
 }
 
 function clearOvr() {
@@ -938,6 +942,7 @@ function clearOvr() {
     // Limpiar líneas de Elliott
     ewLines.forEach(s => { try { chart.removeSeries(s); } catch(e) {} });
     ewLines = [];
+    ewMarkersBuf = [];
     if (cSer) cSer.setMarkers([]);
   });
 }
@@ -1018,12 +1023,16 @@ function renderElliottWaves(cc, tf) {
         }
       }
 
-      // Aplicar markers
-      if (markers.length && cSer) {
-        const existing = cSer.markers() || [];
-        cSer.setMarkers([...existing, ...markers].sort((a,b) => a.time - b.time));
+      // Aplicar markers — acumular globalmente (cSer.markers() no existe en v4)
+      if (markers.length) {
+        ewMarkersBuf.push(...markers);
       }
     });
+
+    // Aplicar todos los markers juntos al final
+    if (cSer && ewMarkersBuf.length) {
+      cSer.setMarkers(ewMarkersBuf.slice().sort((a,b) => a.time - b.time));
+    }
   });
 }
 
