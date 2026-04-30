@@ -1,7 +1,7 @@
 {
   "name": "trading-dashboard-pro",
-  "version": "5.0.0",
-  "description": "Professional modular trading dashboard — Elliott, Hurst, Fibonacci, Pivots, VPOC, Sessions, Telegram 24/7",
+  "version": "6.0.0",
+  "description": "Professional modular trading dashboard — Elliott, Hurst, Fibonacci, Pivots, VPOC, Sessions, RSI, Telegram 24/7, Scanner multi-par",
   "main": "server.js",
   "type": "module",
   "scripts": {
