@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Trading Dashboard PRO</title>
+<title>Trading Dashboard PRO v6</title>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 /* ═══════════════════════════════════════════
@@ -244,8 +244,8 @@ tr:hover td{background:var(--bg3)}
 <div id="LS">
   <div class="l-box">
     <div class="l-logo">Trading Dashboard</div>
-    <div class="l-title">PRO v5</div>
-    <div class="l-sub">Acceso Restringido · Motor 24/7</div>
+    <div class="l-title">PRO v6</div>
+    <div class="l-sub">Acceso Restringido · Scanner 24/7 · RSI+FLD+Fib</div>
     <input class="l-inp" type="password" id="PI" placeholder="••••••••"
       onkeydown="if(event.key==='Enter')doLogin()" autocomplete="current-password"/>
     <button class="l-btn" onclick="doLogin()">INGRESAR</button>
@@ -262,7 +262,7 @@ tr:hover td{background:var(--bg3)}
 
   <!-- HEADER -->
   <div class="hdr">
-    <span class="logo">PRO</span>
+    <span class="logo">PRO v6</span>
     <div class="mode-row">
       <button class="mbn ms" id="BMS" onclick="setMode('scalp')">⚡ SCALP</button>
       <button class="mbn"    id="BMW" onclick="setMode('swing')">📊 SWING</button>
@@ -275,6 +275,13 @@ tr:hover td{background:var(--bg3)}
       <option value="XRPUSDT">XRP/USDT</option>
       <option value="ADAUSDT">ADA/USDT</option>
       <option value="DOGEUSDT">DOGE/USDT</option>
+      <option value="LINKUSDT">LINK/USDT</option>
+      <option value="AVAXUSDT">AVAX/USDT</option>
+      <option value="DOTUSDT">DOT/USDT</option>
+      <option value="MATICUSDT">MATIC/USDT</option>
+      <option value="LTCUSDT">LTC/USDT</option>
+      <option value="UNIUSDT">UNI/USDT</option>
+      <option value="NEARUSDT">NEAR/USDT</option>
     </select>
     <div class="tf-row" id="TFR"></div>
     <div class="sess-row" id="SESS"></div>
@@ -391,6 +398,7 @@ tr:hover td{background:var(--bg3)}
         <div class="ic"><span class="lbl">Fib 38.2</span><span class="val up" id="IF3">—</span></div>
         <div class="ic"><span class="lbl" id="FL1">FLD-A</span><span class="val neu" id="IFA">—</span></div>
         <div class="ic"><span class="lbl" id="FL2">FLD-B</span><span class="val neu" id="IFB">—</span></div>
+        <div class="ic"><span class="lbl">RSI-14</span><span class="val neu" id="IRSI">—</span></div>
         <div class="ic">
           <span class="lbl" title="Volume Point of Control — precio de mayor volumen, actúa como imán de precio y S/R dinámico">VPOC ⓘ</span>
           <span class="val pur" id="IVPC">—</span>
@@ -1121,6 +1129,15 @@ function runSignals() {
     const cfg = TFC[curTF] || TFC['1h'];
     const fa = fldC(cc, cfg.hp[0]), fb2 = fldC(cc, cfg.hp[1]);
     const fldA = fa.length ? fa[fa.length-1].value : null, fldB = fb2.length ? fb2[fb2.length-1].value : null;
+    // RSI en info bar
+    const rsi = calcRSI(cc);
+    safe(() => {
+      const el = document.getElementById('IRSI'); if (!el) return;
+      if (rsi) {
+        el.textContent = rsi.toFixed(1);
+        el.className = `val ${rsi > 70 ? 'dn' : rsi < 30 ? 'up' : rsi > 50 ? 'up' : 'neu'}`;
+      }
+    });
     if (curMode === 'scalp') doScalp(price, pv, fb, fldA, fldB);
     else doSwing(price, pv, fb, fldA, fldB);
   });
@@ -1260,24 +1277,199 @@ function setEntry(en, sl, t1, t2, sig) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  SERVER POLL
+//  RSI — indicador adicional para el scoring
+// ═══════════════════════════════════════════════════════════════
+function calcRSI(cc, period = 14) {
+  return safe(() => {
+    if (cc.length < period + 1) return null;
+    const closes = cc.map(c => c.close);
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= period; i++) {
+      const d = closes[i] - closes[i - 1];
+      if (d > 0) gains += d; else losses -= d;
+    }
+    let ag = gains / period, al = losses / period;
+    for (let i = period + 1; i < closes.length; i++) {
+      const d = closes[i] - closes[i - 1];
+      ag = (ag * (period - 1) + (d > 0 ? d : 0)) / period;
+      al = (al * (period - 1) + (d < 0 ? -d : 0)) / period;
+    }
+    return al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+  }, null);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SCANNER MULTI-SÍMBOLO — corre en el navegador
+// ═══════════════════════════════════════════════════════════════
+const SCAN_SYMS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','LINKUSDT','AVAXUSDT','DOTUSDT'];
+const SCAN_TFS  = ['5m','1h','4h'];
+let scanResults  = {};
+let scanRunning  = false;
+const alertCooldown = {};
+
+async function fetchScanCandles(sym, tf) {
+  return await safeAsync(async () => {
+    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=200`);
+    const d = await r.json();
+    if (!Array.isArray(d)) return null;
+    return d.map(k => ({ time:+k[0]/1000, open:+k[1], high:+k[2], low:+k[3], close:+k[4], vol:+k[5] }));
+  }, null);
+}
+
+function scoreScanSignal(cc, tf) {
+  return safe(() => {
+    if (!cc || cc.length < 60) return null;
+    const price = cc[cc.length - 1].close;
+    const pv  = calcPiv(cc);
+    const fb  = calcFib(cc);
+    const cfg = TFC[tf] || TFC['1h'];
+    const fa  = fldC(cc, cfg.hp[0]);
+    const fb2 = fldC(cc, cfg.hp[1]);
+    const fldA = fa.length  ? fa[fa.length-1].value  : null;
+    const fldB = fb2.length ? fb2[fb2.length-1].value : null;
+    const rsi  = calcRSI(cc);
+
+    let fldDir = null;
+    if (fldA && fldB) {
+      const aa = price > fldA, ab = price > fldB;
+      if (aa && ab) fldDir = 'up';
+      else if (!aa && !ab) fldDir = 'dn';
+    }
+
+    const inFib  = fb && price >= fb.r618 && price <= fb.r382;
+    let pvOk = false;
+    if (pv) for (const v of [pv.PP, pv.R1, pv.S1, pv.R2, pv.S2])
+      if (Math.abs(price - v) / price < 0.008) { pvOk = true; break; }
+
+    const vpoc   = calcVPOC(cc.slice(-100));
+    const nearV  = vpoc && Math.abs(price - vpoc) / price < 0.006;
+    const rsiOk  = rsi && ((fldDir === 'up' && rsi < 65) || (fldDir === 'dn' && rsi > 35));
+
+    const score = [fldDir !== null, inFib, pvOk, nearV, rsiOk].filter(Boolean).length;
+    const dir   = fldDir;
+
+    if (score >= 3 && dir) {
+      return {
+        signal: dir === 'up' ? 'LONG' : 'SHORT',
+        score, max: 5, dir, price, rsi: rsi ? rsi.toFixed(1) : '—',
+        entry: dir === 'up' ? fb.r618 : fb.r382,
+        sl:    dir === 'up' ? fb.L    : fb.H,
+        t1:    dir === 'up' ? fb.r382 : fb.r618,
+        t2:    dir === 'up' ? fb.r236 : fb.r786,
+        vpoc, rules: { fldDir, inFib, pvOk, nearV, rsiOk },
+      };
+    }
+    return { signal: 'WAIT', score, max: 5, dir, price, rsi: rsi ? rsi.toFixed(1) : '—' };
+  }, null);
+}
+
+async function runScanCycle() {
+  if (scanRunning) return;
+  scanRunning = true;
+  safe(() => { document.getElementById('EDOT').className = 'edot on'; document.getElementById('EMSG').textContent = 'Scanner: activo'; });
+
+  const signals = [];
+  for (const sym of SCAN_SYMS) {
+    for (const tf of SCAN_TFS) {
+      await new Promise(r => setTimeout(r, 300));
+      const cc  = await fetchScanCandles(sym, tf);
+      if (!cc) continue;
+      const sig = scoreScanSignal(cc, tf);
+      if (!sig || sig.signal === 'WAIT') continue;
+
+      signals.push({ sym, tf, ...sig });
+
+      // Auto-alerta Telegram si score >= 4
+      const key = `${sym}-${tf}`;
+      const now = Date.now();
+      if (sig.score >= 4 && (!alertCooldown[key] || now - alertCooldown[key] > 10 * 60 * 1000)) {
+        alertCooldown[key] = now;
+        autoSendTG(sym, tf, sig);
+      }
+    }
+  }
+
+  scanResults = signals;
+  renderScanResults(signals);
+  scanRunning = false;
+  safe(() => { document.getElementById('SCTS').textContent = 'Act. ' + new Date().toLocaleTimeString('es-MX'); });
+}
+
+function renderScanResults(signals) {
+  safe(() => {
+    const el = document.getElementById('SCLIST');
+    if (!signals.length) {
+      el.innerHTML = '<div class="scan-load" style="opacity:.5">Sin señales activas</div>'; return;
+    }
+    el.innerHTML = signals.map(s => {
+      const isL = s.signal === 'LONG';
+      const dots = Array(s.max).fill(0).map((_, i) =>
+        `<span class="scd${i < s.score ? (isL ? ' sg' : ' sl') : ''}"></span>`
+      ).join('');
+      return `<div class="scan-card${isL ? ' sig-long' : ' sig-short'}" onclick="safe(()=>{document.getElementById('SYM').value='${s.sym}';fullReload()})">
+        <div class="sc-top">
+          <span class="sc-sym">${s.sym.replace('USDT','')}</span>
+          <span class="sc-tf">${s.tf}</span>
+        </div>
+        <div class="sc-dots">${dots}</div>
+        <div class="sc-dir ${isL ? 'up' : 'dn'}">${isL ? '▲ LONG' : '▼ SHORT'} · ${s.score}/${s.max}</div>
+        <div class="sc-price">${fp(s.price)}</div>
+        <div class="sc-detail">RSI ${s.rsi} · Entrada ${fp(s.entry)}</div>
+      </div>`;
+    }).join('');
+  });
+}
+
+async function autoSendTG(sym, tf, sig) {
+  await safeAsync(async () => {
+    const cfg = JSON.parse(localStorage.getItem('tdp-tg') || '{}');
+    if (!cfg.token || !cfg.chatId) return;
+    const emoji = sig.signal === 'LONG' ? '🟢' : '🔴';
+    const time  = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+    const text  = `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>
+
+🕐 <b>Hora MX:</b> ${time}
+📊 <b>Confluencia:</b> ${sig.score}/${sig.max} condiciones
+${sig.dir === 'up' ? '▲' : '▼'} <b>RSI:</b> ${sig.rsi}
+
+💰 <b>Niveles:</b>
+  • Entrada:  <code>${fp(sig.entry)}</code>
+  • Stop:     <code>${fp(sig.sl)}</code>
+  • Target 1: <code>${fp(sig.t1)}</code>
+  • Target 2: <code>${fp(sig.t2)}</code>
+
+✅ FLD: ${sig.rules.fldDir || '—'}
+${sig.rules.inFib    ? '✅' : '❌'} Zona Fibonacci 38.2–61.8%
+${sig.rules.pvOk     ? '✅' : '❌'} Confluencia Pivote
+${sig.rules.nearV    ? '✅' : '❌'} Proximidad VPOC
+${sig.rules.rsiOk    ? '✅' : '❌'} RSI confirmado
+
+⚠️ <i>Sistema automático. Valida siempre con tu análisis personal.</i>`;
+    await fetch('/api/telegram', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: cfg.token, chatId: cfg.chatId, text }),
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SERVER POLL + SCANNER INIT
 // ═══════════════════════════════════════════════════════════════
 async function pollServer() {
   await safeAsync(async () => {
-    const r = await fetch('/api/state'); const d = await r.json();
+    await fetch('/api/state');
     safe(() => {
       document.getElementById('EDOT').className = 'edot on';
-      document.getElementById('EMSG').textContent = 'Modo: Análisis en navegador';
+      document.getElementById('EMSG').textContent = 'Motor: activo';
       document.getElementById('ENG-NOTICE').className = 'eng-notice eng-ok';
-      document.getElementById('ENG-TXT').textContent = '🌐 Datos en tiempo real desde tu conexión. El análisis corre localmente en tu navegador.';
-      document.getElementById('SCLIST').innerHTML = '<div class="scan-load">Análisis activo en tu navegador</div>';
-      document.getElementById('SCTS').textContent = 'Act. ' + new Date().toLocaleTimeString('es-MX');
+      document.getElementById('ENG-TXT').textContent = '🌐 Scanner multi-par activo en tu navegador. Alertas Telegram automáticas con score ≥ 4/5.';
     });
   });
 }
 
 async function refreshScanner() {
-  safe(() => { document.getElementById('SCLIST').innerHTML = '<div class="scan-load">Análisis activo en tu navegador</div>'; });
+  safe(() => { document.getElementById('SCLIST').innerHTML = '<div class="scan-load">Escaneando mercado...</div>'; });
+  await runScanCycle();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1305,7 +1497,7 @@ async function testTG() {
     const t = document.getElementById('TT').value.trim(), c = document.getElementById('TC').value.trim();
     if (!t || !c) { showMst('TGST','err','Completa los campos'); return; }
     showMst('TGST','ok','Enviando...');
-    const r = await fetch('/api/telegram', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token:t, chatId:c, text:`✅ <b>Test OK — Trading Dashboard PRO v5</b>\n🕐 ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}\n\n🖥️ El motor corre en el navegador.\n📱 Recibirás alertas manuales desde aquí.`}) });
+    const r = await fetch('/api/telegram', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token:t, chatId:c, text:`✅ <b>Test OK — Trading Dashboard PRO v6</b>\n🕐 ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}\n\n🌐 Scanner multi-par activo (10 pares × 3 TFs).\n📡 Alertas automáticas: score ≥ 4/5 condiciones.\n📊 Motor: FLD + Fibonacci + Pivotes + VPOC + RSI`}) });
     const d = await r.json();
     d.ok ? showMst('TGST','ok','✓ Telegram funcionando correctamente') : showMst('TGST','err','Error — verifica token y Chat ID');
   });
@@ -1533,7 +1725,12 @@ function initDashboard() {
   safe(() => {
     initChart(); buildTFR(MC[curMode]); buildLayR(MC[curMode]);
     updateSess(); fullReload();
-    pollServer(); setInterval(() => safe(pollServer), 10000);
+    pollServer(); setInterval(() => safe(pollServer), 30000);
+    // Iniciar scanner multi-símbolo con retraso para no bloquear la carga inicial
+    setTimeout(() => {
+      runScanCycle();
+      setInterval(() => runScanCycle(), 3 * 60 * 1000); // cada 3 min
+    }, 5000);
   });
 }
 window.addEventListener('load', initAuth);
