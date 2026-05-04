@@ -569,8 +569,7 @@ function applyTheme(id) {
     THEMES.forEach(t => { if (t.id) app.classList.remove(t.id); });
     if (id) app.classList.add(id);
     ['THS','LTH'].forEach(buildSwatches);
-    const themeBg = THEMES.find(t => t.id === id)?.bg || '#141a24';
-    if (chart) chart.applyOptions({ layout: { background: { type:'solid', color: themeBg } } });
+    if (chart) { const themeBg = THEMES.find(t=>t.id===id)?.bg||'#141a24'; chart.applyOptions({ layout: { background: { type:'solid', color: themeBg } } }); }
   });
 }
 
@@ -624,7 +623,8 @@ function showApp() {
     document.getElementById('LS').classList.add('H');
     document.getElementById('APP').classList.remove('H');
     buildSwatches('THS');
-    setTimeout(() => safe(initDashboard), 200);
+    // 400ms: tiempo suficiente para que el navegador pinte el layout completo
+    setTimeout(() => safe(initDashboard), 400);
   });
 }
 function doLogout() { sessionStorage.removeItem('tdp-auth'); location.reload(); }
@@ -907,15 +907,13 @@ function liveUpdateMacro(price) {
 //  CHART
 // ═══════════════════════════════════════════════════════════════
 function initChart() {
-  requestAnimationFrame(() => requestAnimationFrame(() => safe(() => {
+  safe(() => {
     const wrap = document.getElementById('CW');
     wrap.innerHTML = '';
-    // window.innerWidth SIEMPRE tiene valor real, sin importar display:none previo
-    const W = Math.max(300, window.innerWidth - 316 - 32);
-    const H = Math.max(300, Math.floor(window.innerHeight * 0.45));
-    wrap.style.width   = W + 'px';
-    wrap.style.height  = H + 'px';
-    wrap.style.display = 'block';
+    // window.innerWidth SIEMPRE tiene dimensiones reales, sin depender del DOM
+    const W = Math.max(300, window.innerWidth - 320);
+    const H = Math.max(280, Math.round(window.innerHeight * 0.44));
+    wrap.style.cssText = `width:${W}px;height:${H}px;min-height:${H}px;display:block;flex-shrink:0;`;
     chart = LightweightCharts.createChart(wrap, {
       width: W, height: H,
       layout: { background: { type:'solid', color:'#141a24' }, textColor: 'rgba(150,160,180,.8)' },
@@ -933,13 +931,12 @@ function initChart() {
     chart.priceScale('vol').applyOptions({ scaleMargins:{top:.85,bottom:0} });
     window.addEventListener('resize', () => safe(() => {
       if (!chart) return;
-      const nW = Math.max(300, window.innerWidth - 316 - 32);
-      const nH = Math.max(300, Math.floor(window.innerHeight * 0.45));
-      wrap.style.width  = nW + 'px';
-      wrap.style.height = nH + 'px';
+      const nW = Math.max(300, window.innerWidth - 320);
+      const nH = Math.max(280, Math.round(window.innerHeight * 0.44));
+      wrap.style.width = nW+'px'; wrap.style.height = nH+'px';
       chart.resize(nW, nH);
     }));
-  })));
+  });
 }
 
 function clearOvr() {
@@ -1631,11 +1628,6 @@ function setChartData() {
     cSer.setData(cc.map(c => ({time:c.time, open:c.open, high:c.high, low:c.low, close:c.close})));
     vSer.setData(cc.map(c => ({time:c.time, value:c.vol, color:c.close>=c.open?'rgba(38,166,154,.3)':'rgba(239,83,80,.3)'})));
     updatePrice(cc[cc.length-1].close);
-    // Forzar resize con dimensiones reales del contenedor antes de fitContent
-    const wrap = document.getElementById('CW');
-    if (wrap && wrap.offsetWidth > 0 && wrap.offsetHeight > 0) {
-      chart.resize(wrap.offsetWidth, wrap.offsetHeight);
-    }
     chart.timeScale().fitContent();
     renderOvr();
     document.querySelectorAll('.mc').forEach(c => c.classList.remove('act'));
