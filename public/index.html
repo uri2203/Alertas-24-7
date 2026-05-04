@@ -954,6 +954,16 @@ function initChart() {
     });
     vSer = chart.addHistogramSeries({ priceScaleId:'vol', scaleMargins:{top:.85,bottom:0} });
     chart.priceScale('vol').applyOptions({ scaleMargins:{top:.85,bottom:0} });
+    // Forzar resize disparando evento real — soluciona pantalla negra sin clics
+    setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+      chart.applyOptions({ width: wrap.offsetWidth, height: wrap.offsetHeight });
+      chart.timeScale().fitContent();
+    }, 100);
+    setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+      chart.applyOptions({ width: wrap.offsetWidth, height: wrap.offsetHeight });
+    }, 500);
   });
 }
 
