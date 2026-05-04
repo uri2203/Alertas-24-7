@@ -377,7 +377,7 @@ tr:hover td{background:var(--bg3)}
       </div>
 
       <!-- CHART -->
-      <div id="CW"></div>
+      <div id="CW" style="width:100%;height:340px;min-height:340px;display:block;position:relative;"></div>
 
       <!-- ENTRY LEVELS -->
       <div class="ebox">
@@ -623,7 +623,8 @@ function showApp() {
     document.getElementById('LS').classList.add('H');
     document.getElementById('APP').classList.remove('H');
     buildSwatches('THS');
-    setTimeout(() => safe(initDashboard), 80);
+    // 300ms garantiza que el navegador terminó de pintar el layout completo
+    setTimeout(() => safe(initDashboard), 300);
   });
 }
 function doLogout() { sessionStorage.removeItem('tdp-auth'); location.reload(); }
@@ -926,10 +927,16 @@ function initChart() {
   safe(() => {
     const wrap = document.getElementById('CW');
     wrap.innerHTML = '';
-    // Forzar dimensiones visibles — el CSS garantiza 340px pero lo confirmamos aquí
-    wrap.style.cssText = 'height:340px;min-height:340px;width:100%;display:block;';
-    const W = wrap.offsetWidth  || 800;
-    const H = wrap.offsetHeight || 340;
+    wrap.style.cssText = 'width:100%;height:340px;min-height:340px;display:block;position:relative;';
+
+    // Si el navegador aún no calculó dimensiones, reintentar
+    if (!wrap.offsetWidth || !wrap.offsetHeight) {
+      setTimeout(initChart, 200);
+      return;
+    }
+
+    const W = wrap.offsetWidth;
+    const H = wrap.offsetHeight;
     chart = LightweightCharts.createChart(wrap, {
       autoSize: true,
       width: W,
