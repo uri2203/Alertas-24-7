@@ -38,7 +38,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'Courier 
 
 /* ═══ APP GRID ═════════════════════════════ */
 #APP{height:100vh;display:grid;grid-template-rows:40px 28px 1fr;overflow:hidden}
-#APP.H{visibility:hidden;opacity:0;pointer-events:none}
+#APP.H{visibility:hidden;pointer-events:none}
 
 /* ═══ HEADER ═══════════════════════════════ */
 .hdr{display:flex;align-items:center;gap:5px;padding:0 10px;background:var(--bg2);border-bottom:.5px solid var(--b1);overflow:hidden}
@@ -1622,6 +1622,11 @@ function setChartData() {
     cSer.setData(cc.map(c => ({time:c.time, open:c.open, high:c.high, low:c.low, close:c.close})));
     vSer.setData(cc.map(c => ({time:c.time, value:c.vol, color:c.close>=c.open?'rgba(38,166,154,.3)':'rgba(239,83,80,.3)'})));
     updatePrice(cc[cc.length-1].close);
+    // Forzar resize con dimensiones reales del contenedor
+    const wrap = document.getElementById('CW');
+    const W = wrap.clientWidth || wrap.offsetWidth;
+    const H = wrap.clientHeight || wrap.offsetHeight;
+    if (W > 10 && H > 10) chart.resize(W, H);
     chart.timeScale().fitContent();
     renderOvr();
     document.querySelectorAll('.mc').forEach(c => c.classList.remove('act'));
