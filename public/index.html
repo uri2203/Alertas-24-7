@@ -754,31 +754,48 @@ function getSessLevels(cc) {
 function swings(cc, lb) {
   return safe(() => {
     const o = [];
-    for (let i = lb; i < cc.length-lb; i++) {
+    // lb más pequeño → detecta más swings estructurales reales
+    const L = Math.max(2, lb);
+    for (let i = L; i < cc.length - L; i++) {
       let h = true, l = true;
-      for (let j = 1; j <= lb; j++) {
-        if (cc[i-j].high >= cc[i].high || cc[i+j].high >= cc[i].high) h = false;
-        if (cc[i-j].low <= cc[i].low || cc[i+j].low <= cc[i].low) l = false;
+      for (let j = 1; j <= L; j++) {
+        // ">" en lugar de ">=" → permite empates sin romper el swing
+        if (cc[i-j].high > cc[i].high || cc[i+j].high > cc[i].high) h = false;
+        if (cc[i-j].low  < cc[i].low  || cc[i+j].low  < cc[i].low)  l = false;
       }
-      if (h) o.push({time: cc[i].time, p: cc[i].high, t: 'H'});
-      if (l) o.push({time: cc[i].time, p: cc[i].low, t: 'L'});
+      if (h) o.push({ time: cc[i].time, p: cc[i].high, t: 'H', idx: i });
+      if (l) o.push({ time: cc[i].time, p: cc[i].low,  t: 'L', idx: i });
     }
-    return o.sort((a,b) => a.time-b.time);
+    // Eliminar swings consecutivos del mismo tipo, conservar el más extremo
+    const merged = [];
+    for (const s of o.sort((a,b) => a.time - b.time)) {
+      const prev = merged[merged.length - 1];
+      if (prev && prev.t === s.t) {
+        if ((s.t === 'H' && s.p > prev.p) || (s.t === 'L' && s.p < prev.p))
+          merged[merged.length - 1] = s;
+      } else {
+        merged.push(s);
+      }
+    }
+    return merged;
   }, []);
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  ELLIOTT WAVE DETECTION — robusto, con metadata completa
+//  ELLIOTT WAVE DETECTION — reglas relajadas para mayor detección
 // ═══════════════════════════════════════════════════════════════
 function detectEW(cc, tf) {
   return safe(() => {
-    const lb = Math.max(3, Math.floor(cc.length / 35));
+    // lb adaptativo: más pequeño = más swings = más patrones detectados
+    const lb = Math.max(2, Math.floor(cc.length / 50));
     const sw = swings(cc, lb);
     const cfg = TFC[tf] || TFC['1h'];
     const found = [];
 
     for (let i = 0; i + 4 < sw.length; i++) {
       const w = sw.slice(i, i + 6);
+
+      // Verificar alternancia H/L
       let alt = true;
       for (let j = 1; j < w.length; j++) if (w[j].t === w[j-1].t) { alt = false; break; }
       if (!alt) continue;
@@ -787,10 +804,11 @@ function detectEW(cc, tf) {
 
       if (up && w.length >= 5) {
         const w1 = w[1].p - w[0].p; if (w1 <= 0) continue;
-        const w2r = (w[1].p - w[2].p) / w1; if (w2r < .3 || w2r > .82) continue;
-        const w3 = w[3].p - w[2].p; if (w3 < w1 * .88) continue;
-        const w4r = (w[3].p - w[4].p) / w3; if (w4r < .18 || w4r > .65) continue;
-        if (w[4].p <= w[1].p) continue;
+        // Reglas relajadas: W2 retrocede 20–88%, W3 >= 70% de W1, W4 retrocede 10–75%
+        const w2r = (w[1].p - w[2].p) / w1; if (w2r < .20 || w2r > .88) continue;
+        const w3  = w[3].p - w[2].p;         if (w3 < w1 * .70) continue;
+        const w4r = (w[3].p - w[4].p) / w3;  if (w4r < .10 || w4r > .75) continue;
+        if (w[4].p <= w[1].p) continue; // W4 no solapa W1
         found.push({
           pts: w.slice(0, Math.min(6, w.length)),
           dir: 'up', w1, w2r, w3ext: w3/w1, w4r,
@@ -801,9 +819,9 @@ function detectEW(cc, tf) {
 
       if (!up && w.length >= 5) {
         const w1 = w[0].p - w[1].p; if (w1 <= 0) continue;
-        const w2r = (w[2].p - w[1].p) / w1; if (w2r < .3 || w2r > .82) continue;
-        const w3 = w[2].p - w[3].p; if (w3 < w1 * .88) continue;
-        const w4r = (w[4].p - w[3].p) / w3; if (w4r < .18 || w4r > .65) continue;
+        const w2r = (w[2].p - w[1].p) / w1; if (w2r < .20 || w2r > .88) continue;
+        const w3  = w[2].p - w[3].p;         if (w3 < w1 * .70) continue;
+        const w4r = (w[4].p - w[3].p) / w3;  if (w4r < .10 || w4r > .75) continue;
         if (w[4].p >= w[1].p) continue;
         found.push({
           pts: w.slice(0, 5),
@@ -813,7 +831,6 @@ function detectEW(cc, tf) {
         });
       }
     }
-    // Retornar hasta 3 ondas más recientes para mejor visualización
     return found.slice(-3);
   }, []);
 }
