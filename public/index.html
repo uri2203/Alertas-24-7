@@ -38,7 +38,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'Courier 
 
 /* ═══ APP GRID ═════════════════════════════ */
 #APP{height:100vh;display:grid;grid-template-rows:40px 28px 1fr;overflow:hidden}
-#APP.H{display:none}
+#APP.H{visibility:hidden;opacity:0;pointer-events:none}
 
 /* ═══ HEADER ═══════════════════════════════ */
 .hdr{display:flex;align-items:center;gap:5px;padding:0 10px;background:var(--bg2);border-bottom:.5px solid var(--b1);overflow:hidden}
@@ -569,7 +569,7 @@ function applyTheme(id) {
     THEMES.forEach(t => { if (t.id) app.classList.remove(t.id); });
     if (id) app.classList.add(id);
     ['THS','LTH'].forEach(buildSwatches);
-    if (chart) { const themeBg = THEMES.find(t=>t.id===id)?.bg||'#141a24'; chart.applyOptions({ layout: { background: { type:'solid', color: themeBg } } }); }
+    if (chart) chart.applyOptions({ layout: { background: { type:'solid', color:'transparent' } } });
   });
 }
 
@@ -623,8 +623,7 @@ function showApp() {
     document.getElementById('LS').classList.add('H');
     document.getElementById('APP').classList.remove('H');
     buildSwatches('THS');
-    // 400ms: tiempo suficiente para que el navegador pinte el layout completo
-    setTimeout(() => safe(initDashboard), 400);
+    initDashboard();
   });
 }
 function doLogout() { sessionStorage.removeItem('tdp-auth'); location.reload(); }
@@ -907,16 +906,15 @@ function liveUpdateMacro(price) {
 //  CHART
 // ═══════════════════════════════════════════════════════════════
 function initChart() {
-  safe(() => {
-    const wrap = document.getElementById('CW');
-    wrap.innerHTML = '';
-    // window.innerWidth SIEMPRE tiene dimensiones reales, sin depender del DOM
-    const W = Math.max(300, window.innerWidth - 320);
-    const H = Math.max(280, Math.round(window.innerHeight * 0.44));
-    wrap.style.cssText = `width:${W}px;height:${H}px;min-height:${H}px;display:block;flex-shrink:0;`;
+  // doble rAF: garantiza que el grid CSS ya tiene dimensiones reales antes de crear el chart
+  requestAnimationFrame(() => requestAnimationFrame(() => safe(() => {
+    const wrap = document.getElementById('CW'); wrap.innerHTML = '';
+    wrap.style.minHeight = '240px';
+    const w = Math.max(200, wrap.clientWidth);
+    const h = Math.max(240, wrap.clientHeight);
     chart = LightweightCharts.createChart(wrap, {
-      width: W, height: H,
-      layout: { background: { type:'solid', color:'#141a24' }, textColor: 'rgba(150,160,180,.8)' },
+      width: w, height: h,
+      layout: { background: { type:'solid', color:'transparent' }, textColor: 'rgba(150,160,180,.8)' },
       grid: { vertLines: { color:'rgba(255,255,255,.03)' }, horzLines: { color:'rgba(255,255,255,.03)' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       rightPriceScale: { borderColor:'rgba(255,255,255,.07)', scaleMargins:{top:.05,bottom:.2} },
@@ -929,14 +927,10 @@ function initChart() {
     });
     vSer = chart.addHistogramSeries({ priceScaleId:'vol', scaleMargins:{top:.85,bottom:0} });
     chart.priceScale('vol').applyOptions({ scaleMargins:{top:.85,bottom:0} });
-    window.addEventListener('resize', () => safe(() => {
-      if (!chart) return;
-      const nW = Math.max(300, window.innerWidth - 320);
-      const nH = Math.max(280, Math.round(window.innerHeight * 0.44));
-      wrap.style.width = nW+'px'; wrap.style.height = nH+'px';
-      chart.resize(nW, nH);
-    }));
-  });
+    new ResizeObserver(() => {
+      safe(() => { if (chart) { const rw = wrap.clientWidth, rh = wrap.clientHeight; if (rw>50 && rh>50) chart.applyOptions({width:rw,height:rh}); } });
+    }).observe(wrap);
+  })));
 }
 
 function clearOvr() {
