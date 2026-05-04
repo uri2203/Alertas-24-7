@@ -569,7 +569,8 @@ function applyTheme(id) {
     THEMES.forEach(t => { if (t.id) app.classList.remove(t.id); });
     if (id) app.classList.add(id);
     ['THS','LTH'].forEach(buildSwatches);
-    if (chart) chart.applyOptions({ layout: { background: { type:'solid', color:'transparent' } } });
+    const themeBg = THEMES.find(t => t.id === id)?.bg || '#141a24';
+    if (chart) chart.applyOptions({ layout: { background: { type:'solid', color: themeBg } } });
   });
 }
 
@@ -917,7 +918,7 @@ function initChart() {
     wrap.style.display = 'block';
     chart = LightweightCharts.createChart(wrap, {
       width: W, height: H,
-      layout: { background: { type:'solid', color:'transparent' }, textColor: 'rgba(150,160,180,.8)' },
+      layout: { background: { type:'solid', color:'#141a24' }, textColor: 'rgba(150,160,180,.8)' },
       grid: { vertLines: { color:'rgba(255,255,255,.03)' }, horzLines: { color:'rgba(255,255,255,.03)' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       rightPriceScale: { borderColor:'rgba(255,255,255,.07)', scaleMargins:{top:.05,bottom:.2} },
