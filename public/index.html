@@ -623,7 +623,11 @@ function showApp() {
     document.getElementById('LS').classList.add('H');
     document.getElementById('APP').classList.remove('H');
     buildSwatches('THS');
-    initDashboard();
+    // Esperar 2 frames + 50ms para que el grid CSS tenga dimensiones reales
+    // antes de crear el chart (evita pantalla negra en cold start de Render)
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      setTimeout(() => safe(initDashboard), 50);
+    }));
   });
 }
 function doLogout() { sessionStorage.removeItem('tdp-auth'); location.reload(); }
@@ -906,12 +910,15 @@ function liveUpdateMacro(price) {
 //  CHART
 // ═══════════════════════════════════════════════════════════════
 function initChart() {
-  // doble rAF: garantiza que el grid CSS ya tiene dimensiones reales antes de crear el chart
   requestAnimationFrame(() => requestAnimationFrame(() => safe(() => {
     const wrap = document.getElementById('CW'); wrap.innerHTML = '';
     wrap.style.minHeight = '240px';
-    const w = Math.max(200, wrap.clientWidth);
-    const h = Math.max(240, wrap.clientHeight);
+    const w = Math.max(200, wrap.clientWidth  || wrap.offsetWidth  || 600);
+    const h = Math.max(240, wrap.clientHeight || wrap.offsetHeight || 400);
+    // Si el contenedor aún no tiene dimensiones, reintentar en 100ms
+    if (wrap.clientWidth < 10 || wrap.clientHeight < 10) {
+      setTimeout(initChart, 100); return;
+    }
     chart = LightweightCharts.createChart(wrap, {
       width: w, height: h,
       layout: { background: { type:'solid', color:'transparent' }, textColor: 'rgba(150,160,180,.8)' },
