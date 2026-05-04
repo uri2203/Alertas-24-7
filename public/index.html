@@ -132,7 +132,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'Courier 
 .dw{background:var(--tx3)}
 
 /* Chart */
-#CW{flex:1;min-height:220px;height:400px;width:100%;background:var(--bg2);border-radius:5px;overflow:hidden}
+#CW{flex:none;height:340px;min-height:340px;width:100%;background:var(--bg2);border-radius:5px;overflow:hidden;display:block}
 
 /* Entry box */
 .ebox{background:var(--bg2);border:.5px solid var(--b1);border-radius:5px;padding:6px 9px}
@@ -926,13 +926,14 @@ function initChart() {
   safe(() => {
     const wrap = document.getElementById('CW');
     wrap.innerHTML = '';
-    wrap.style.minHeight = '300px';
-    wrap.style.width = '100%';
-    wrap.style.display = 'block';
+    // Forzar dimensiones visibles — el CSS garantiza 340px pero lo confirmamos aquí
+    wrap.style.cssText = 'height:340px;min-height:340px;width:100%;display:block;';
+    const W = wrap.offsetWidth  || 800;
+    const H = wrap.offsetHeight || 340;
     chart = LightweightCharts.createChart(wrap, {
       autoSize: true,
-      width: wrap.clientWidth  || 800,
-      height: wrap.clientHeight || 400,
+      width: W,
+      height: H,
       layout: { background: { type:'solid', color:'transparent' }, textColor: 'rgba(150,160,180,.8)' },
       grid: { vertLines: { color:'rgba(255,255,255,.03)' }, horzLines: { color:'rgba(255,255,255,.03)' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
