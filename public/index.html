@@ -132,7 +132,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'Courier 
 .dw{background:var(--tx3)}
 
 /* Chart */
-#CW{flex:1;min-height:220px;background:var(--bg2);border-radius:5px;overflow:hidden}
+#CW{flex:1;min-height:220px;height:400px;width:100%;background:var(--bg2);border-radius:5px;overflow:hidden}
 
 /* Entry box */
 .ebox{background:var(--bg2);border:.5px solid var(--b1);border-radius:5px;padding:6px 9px}
@@ -931,6 +931,8 @@ function initChart() {
     wrap.style.display = 'block';
     chart = LightweightCharts.createChart(wrap, {
       autoSize: true,
+      width: wrap.clientWidth  || 800,
+      height: wrap.clientHeight || 400,
       layout: { background: { type:'solid', color:'transparent' }, textColor: 'rgba(150,160,180,.8)' },
       grid: { vertLines: { color:'rgba(255,255,255,.03)' }, horzLines: { color:'rgba(255,255,255,.03)' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
