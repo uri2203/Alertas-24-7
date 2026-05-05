@@ -1,6 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
 //  routes/state.js
-//  Devuelve estado básico. El frontend no depende de esto para funcionar.
 // ═══════════════════════════════════════════════════════════════
 import { Router } from 'express';
 import { STATE }  from '../engine/scanner.js';
@@ -10,14 +9,14 @@ export function stateRouter() {
 
   router.get('/', (req, res) => {
     res.json({
-      mode:          'frontend-first',
-      engineRunning: false,
-      message:       'El análisis se ejecuta en el navegador del usuario',
+      mode:          'server-autonomous',
+      engineRunning: STATE.engineRunning,
+      message:       'Escáner backend activo 24/7 transmitiendo a Telegram.',
       lastScan:      STATE.lastScan,
       scanCount:     STATE.scanCount,
-      signals:       {},
-      prices:        {},
-      errors:        [],
+      signals:       STATE.signals,
+      prices:        STATE.prices,
+      errors:        STATE.errors,
     });
   });
 
