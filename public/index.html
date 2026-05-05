@@ -1457,8 +1457,14 @@ ${sig.rules.nearV    ? '✅' : '❌'} Proximidad VPOC
 ${sig.rules.rsiOk    ? '✅' : '❌'} RSI confirmado
 
 ⚠️ <i>Sistema automático. Valida siempre con tu análisis personal.</i>`;
+    
+    // Inyección de API Key
     await fetch('/api/telegram', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', 
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pwdHash}`
+      },
       body: JSON.stringify({ token: cfg.token, chatId: cfg.chatId, text }),
     });
   });
@@ -1491,7 +1497,16 @@ async function sendTG(text) {
   return await safeAsync(async () => {
     const cfg = JSON.parse(localStorage.getItem('tdp-tg') || '{}');
     if (!cfg.token || !cfg.chatId) return false;
-    const r = await fetch('/api/telegram', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token:cfg.token, chatId:cfg.chatId, text}) });
+    
+    // Inyección de API Key
+    const r = await fetch('/api/telegram', { 
+      method:'POST', 
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization': `Bearer ${pwdHash}`
+      }, 
+      body: JSON.stringify({token:cfg.token, chatId:cfg.chatId, text}) 
+    });
     const d = await r.json(); return d.ok === true;
   }, false);
 }
@@ -1509,7 +1524,16 @@ async function testTG() {
     const t = document.getElementById('TT').value.trim(), c = document.getElementById('TC').value.trim();
     if (!t || !c) { showMst('TGST','err','Completa los campos'); return; }
     showMst('TGST','ok','Enviando...');
-    const r = await fetch('/api/telegram', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token:t, chatId:c, text:`✅ <b>Test OK — Trading Dashboard PRO v6</b>\n🕐 ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}\n\n🌐 Scanner multi-par activo (10 pares × 3 TFs).\n📡 Alertas automáticas: score ≥ 4/5 condiciones.\n📊 Motor: FLD + Fibonacci + Pivotes + VPOC + RSI`}) });
+    
+    // Inyección de API Key
+    const r = await fetch('/api/telegram', { 
+      method:'POST', 
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization': `Bearer ${pwdHash}`
+      }, 
+      body: JSON.stringify({token:t, chatId:c, text:`✅ <b>Test OK — Trading Dashboard PRO v6</b>\n🕐 ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}\n\n🌐 Scanner multi-par activo (10 pares × 3 TFs).\n📡 Alertas automáticas: score ≥ 4/5 condiciones.\n📊 Motor: FLD + Fibonacci + Pivotes + VPOC + RSI`}) 
+    });
     const d = await r.json();
     d.ok ? showMst('TGST','ok','✓ Telegram funcionando correctamente') : showMst('TGST','err','Error — verifica token y Chat ID');
   });
