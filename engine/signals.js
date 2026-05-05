@@ -79,6 +79,7 @@ export function calcVPOC(candles, buckets = 50) {
   if (!candles || candles.length < 10) return null;
   const H    = Math.max(...candles.map(c => c.high));
   const L    = Math.min(...candles.map(c => c.low));
+  if (H === L) return L; // Corrección: División por cero evitada
   const step = (H - L) / buckets;
   const bins = new Array(buckets).fill(0);
   candles.forEach(c => {
