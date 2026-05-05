@@ -1,18 +1,19 @@
 // ═══════════════════════════════════════════════════════════════
-//  server.js  —  Trading Dashboard PRO v6  (Frontend-First Edition)
-//  El servidor solo sirve archivos estáticos y proxyea Telegram.
-//  TODO el análisis y datos vienen del navegador del usuario.
+//  server.js  —  Trading Dashboard PRO v6  (Scanner Autónomo)
+//  El servidor sirve archivos estáticos, proxyea Telegram
+//  y corre el scanner 24/7 en background.
 // ═══════════════════════════════════════════════════════════════
-import express         from 'express';
-import cors            from 'cors';
-import path            from 'path';
+import express           from 'express';
+import cors              from 'cors';
+import path              from 'path';
 import { fileURLToPath } from 'url';
-import * as dotenv     from 'dotenv';
+import * as dotenv       from 'dotenv';
 dotenv.config();
 
-import { configRouter } from './routes/config.js';
-import { stateRouter }  from './routes/state.js';
-import { alertsRouter } from './routes/alerts.js';
+import { configRouter }  from './routes/config.js';
+import { stateRouter }   from './routes/state.js';
+import { alertsRouter }  from './routes/alerts.js';
+import { startScanner }  from './engine/scanner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,7 +36,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── ROUTES ────────────────────────────────────────────────────
-app.get('/ping',         (_, res) => res.json({ ok: true, time: new Date().toISOString(), mode: 'frontend-first' }));
+app.get('/ping',         (_, res) => res.json({ ok: true, time: new Date().toISOString(), mode: 'scanner-activo' }));
 app.use('/api/config',   configRouter(CONFIG));
 app.use('/api/state',    stateRouter());
 app.use('/api/telegram', alertsRouter(CONFIG));
@@ -48,8 +49,11 @@ app.listen(CONFIG.port, '0.0.0.0', () => {
   console.log(`
 ╔══════════════════════════════════════════╗
 ║  Trading Dashboard PRO v6                ║
-║  Modo   : Frontend-First (sin scanner)   ║
+║  Modo   : Scanner Autónomo 24/7 ACTIVO   ║
 ║  Puerto : ${CONFIG.port}                          ║
 ╚══════════════════════════════════════════╝
   `);
+
+  // Arranca el scanner después de que el servidor esté listo
+  startScanner(CONFIG);
 });
