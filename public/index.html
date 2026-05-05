@@ -20,11 +20,11 @@
 .th-arctic{--bg:#eef3fb;--bg2:#ffffff;--bg3:#e6eef8;--bg4:#d8e6f4;--bg5:#ccdaee;--b1:#ccd8ea;--b2:#b4c8de;--b3:#9ab6d0;--tx:#1a2540;--tx2:#4a6080;--tx3:#8099bb;--acc:#1a5fff;--grn:#167a72;--red:#cc3030;--gld:#b06000;--pur:#6010b0;--cyn:#007a9a;--grn-bg:rgba(22,122,114,.1);--red-bg:rgba(204,48,48,.1);--acc-bg:rgba(26,95,255,.1)}
 .th-parchment{--bg:#f5f0e6;--bg2:#fdf8f0;--bg3:#ede8de;--bg4:#e3ddd2;--bg5:#d8d0c4;--b1:#d0c8bc;--b2:#c0b4a8;--b3:#ae9e90;--tx:#281e10;--tx2:#806050;--tx3:#a8907c;--acc:#a85000;--grn:#156858;--red:#b82828;--gld:#905200;--pur:#580890;--cyn:#006880;--grn-bg:rgba(21,104,88,.1);--red-bg:rgba(184,40,40,.1);--acc-bg:rgba(168,80,0,.1)}
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'Courier New',monospace;font-size:12px;overflow:hidden}
+html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-family:'Courier New',monospace;font-size:12px;overflow:hidden}
 
-/* ═══ LOGIN ════════════════════════════════ */
-#LS{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:9000}
-#LS.H{display:none}
+/* ═══ LOGIN COMPOSITING (FIXED) ════════════ */
+#LS{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:9000;transition:opacity 0.4s ease, visibility 0.4s ease;}
+#LS.H{opacity:0;visibility:hidden;pointer-events:none;}
 .l-box{background:var(--bg2);border:.5px solid var(--b2);border-radius:14px;padding:2.5rem 2rem;width:310px;text-align:center}
 .l-logo{font-size:9px;font-weight:700;letter-spacing:.2em;color:var(--acc);margin-bottom:.4rem;text-transform:uppercase}
 .l-title{font-size:24px;font-weight:700;letter-spacing:-.02em;margin-bottom:.15rem}
@@ -36,9 +36,8 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'Courier 
 .l-err{font-size:10px;color:var(--red);margin-top:.5rem;min-height:14px}
 .l-th{display:flex;align-items:center;gap:8px;font-size:8px;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em}
 
-/* ═══ APP GRID ═════════════════════════════ */
-#APP{height:100vh;display:grid;grid-template-rows:40px 28px 1fr;overflow:hidden}
-#APP.H{visibility:hidden;pointer-events:none}
+/* ═══ APP GRID (ALWAYS RENDERED) ═══════════ */
+#APP{position:fixed;inset:0;display:grid;grid-template-rows:40px 28px 1fr;overflow:hidden;background:var(--bg);z-index:1;}
 
 /* ═══ HEADER ═══════════════════════════════ */
 .hdr{display:flex;align-items:center;gap:5px;padding:0 10px;background:var(--bg2);border-bottom:.5px solid var(--b1);overflow:hidden}
@@ -80,10 +79,10 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'Courier 
 @keyframes pu{0%,100%{opacity:1}50%{opacity:.35}}
 
 /* ═══ BODY GRID ════════════════════════════ */
-.body{display:grid;grid-template-columns:1fr 158px 158px;height:calc(100vh - 68px);overflow:hidden}
+.body{display:grid;grid-template-columns:1fr 158px 158px;height:100%;min-height:0;overflow:hidden}
 
 /* ═══ LEFT ════════════════════════════════ */
-.left{display:flex;flex-direction:column;gap:4px;padding:6px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--b1) transparent}
+.left{display:flex;flex-direction:column;gap:4px;padding:6px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--b1) transparent;min-width:0;min-height:0}
 .panel{display:none}.panel.on{display:block}
 
 /* Bias cards */
@@ -131,8 +130,11 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'Courier 
 .ds{background:var(--red);animation:pu 1s infinite}
 .dw{background:var(--tx3)}
 
-/* Chart */
-#CW{flex:1;min-height:220px;background:var(--bg2);border-radius:5px;overflow:hidden}
+/* Chart & Loaders */
+.cw-wrap{flex:1;min-height:220px;min-width:0;background:var(--bg2);border-radius:5px;overflow:hidden;position:relative;z-index:1}
+#CW{position:absolute;inset:0;width:100%;height:100%;}
+#CW-LOAD{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.65);z-index:10;color:var(--acc);font-weight:700;font-size:14px;letter-spacing:.05em;backdrop-filter:blur(3px);transition:opacity .25s;pointer-events:none}
+#CW-LOAD.H{opacity:0}
 
 /* Entry box */
 .ebox{background:var(--bg2);border:.5px solid var(--b1);border-radius:5px;padding:6px 9px}
@@ -258,7 +260,7 @@ tr:hover td{background:var(--bg3)}
 </div>
 
 <!-- ═══ APP ════════════════════════════════ -->
-<div id="APP" class="H">
+<div id="APP">
 
   <!-- HEADER -->
   <div class="hdr">
@@ -376,8 +378,11 @@ tr:hover td{background:var(--bg3)}
         <span>🖥️</span><span id="ENG-TXT">Motor servidor: verificando...</span>
       </div>
 
-      <!-- CHART -->
-      <div id="CW"></div>
+      <!-- CHART BLINDADO CON WRAPPER RELATIVO Y LOADER -->
+      <div class="cw-wrap" id="CW-WRAP">
+        <div id="CW-LOAD">Sincronizando Mercado...</div>
+        <div id="CW"></div>
+      </div>
 
       <!-- ENTRY LEVELS -->
       <div class="ebox">
@@ -410,10 +415,10 @@ tr:hover td{background:var(--bg3)}
     <!-- ═══ SCANNER SIDEBAR ═══════════════ -->
     <div class="scan-panel">
       <div class="scan-hdr">
-        <span>🔍 Scanner</span>
+        <span>🔍 Scanner Backend</span>
         <span class="scan-ref" onclick="refreshScanner()">↺ act.</span>
       </div>
-      <div id="SCLIST"><div class="scan-load">Iniciando motor...</div></div>
+      <div id="SCLIST"><div class="scan-load">Conectando al servidor...</div></div>
       <div class="scan-ts" id="SCTS"></div>
     </div>
 
@@ -603,8 +608,15 @@ async function initAuth() {
   } catch {
     pwdHash = await sha256('trading2025');
   }
-  if (sessionStorage.getItem('tdp-auth') === '1') showApp();
-  else safe(() => document.getElementById('PI').focus());
+  
+  // INICIALIZACIÓN INVISIBLE: El DOM calcula geometría sin interrupciones bajo el Login
+  if (!chart) initDashboard();
+
+  if (sessionStorage.getItem('tdp-auth') === '1') {
+    showApp();
+  } else {
+    safe(() => document.getElementById('PI').focus());
+  }
 }
 async function doLogin() {
   const v = safe(() => document.getElementById('PI').value, '');
@@ -622,15 +634,13 @@ async function doLogin() {
 function showApp() {
   safe(() => {
     document.getElementById('LS').classList.add('H');
-    document.getElementById('APP').classList.remove('H');
     buildSwatches('THS');
-    initDashboard();
   });
 }
 function doLogout() { sessionStorage.removeItem('tdp-auth'); location.reload(); }
 
 // ═══════════════════════════════════════════════════════════════
-//  TF CONFIG — con colores Elliott por grado
+//  TF CONFIG
 // ═══════════════════════════════════════════════════════════════
 const TFC = {
   '1m':  { deg:'Sub-Minuette', lbl:['i','ii','iii','iv','v'],            hp:[15,30,60], ewCol:'#22d3ee', ewWidth:1.0 },
@@ -661,7 +671,7 @@ let curSig = { signal:null, entry:null, sl:null, t1:null, t2:null };
 let renderDebounce = null;
 
 // ═══════════════════════════════════════════════════════════════
-//  MATH (client-side) — con validación robusta
+//  MATH (client-side)
 // ═══════════════════════════════════════════════════════════════
 const fp = v => {
   if (!isValid(v)) return '—';
@@ -728,7 +738,7 @@ function calcVPOC(cc, bk=50) {
   return safe(() => {
     if (!cc || cc.length < 10) return null;
     const H = Math.max(...cc.map(c => c.high)), L = Math.min(...cc.map(c => c.low));
-    if (H === L) return L; // FIX: Prevent division by zero
+    if (H === L) return L; 
     const st = (H-L)/bk;
     const bins = new Array(bk).fill(0);
     cc.forEach(c => { bins[Math.min(bk-1, Math.floor(((c.high+c.low)/2 - L)/st))] += c.vol; });
@@ -766,9 +776,6 @@ function swings(cc, lb) {
   }, []);
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  ELLIOTT WAVE DETECTION — robusto, con metadata completa
-// ═══════════════════════════════════════════════════════════════
 function detectEW(cc, tf) {
   return safe(() => {
     const lb = Math.max(3, Math.floor(cc.length / 35));
@@ -812,14 +819,10 @@ function detectEW(cc, tf) {
         });
       }
     }
-    // Retornar hasta 3 ondas más recientes para mejor visualización
     return found.slice(-3);
   }, []);
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  SESSIONS
-// ═══════════════════════════════════════════════════════════════
 function sessStatus() {
   return safe(() => {
     const h = new Date().getUTCHours(), m = new Date().getUTCMinutes(), t = h*60+m;
@@ -834,9 +837,6 @@ function updateSess() {
 }
 setInterval(() => safe(updateSess), 60000);
 
-// ═══════════════════════════════════════════════════════════════
-//  MACRO CANDLES
-// ═══════════════════════════════════════════════════════════════
 function renderMacro(id, O, H, L, C, vol, prog, tl) {
   safe(() => {
     const pct = (C-O)/O*100, isBull = C >= O, isDoji = Math.abs(pct) < 0.05, range = H-L || 1;
@@ -906,17 +906,15 @@ function liveUpdateMacro(price) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  CHART
+//  CHART (BLINDADO - RENDERIZADO NATIVO AUTOSIZE)
 // ═══════════════════════════════════════════════════════════════
 function initChart() {
-  // doble rAF: garantiza que el grid CSS ya tiene dimensiones reales antes de crear el chart
-  requestAnimationFrame(() => requestAnimationFrame(() => safe(() => {
-    const wrap = document.getElementById('CW'); wrap.innerHTML = '';
-    wrap.style.minHeight = '240px';
-    const w = Math.max(200, wrap.clientWidth);
-    const h = Math.max(240, wrap.clientHeight);
-    chart = LightweightCharts.createChart(wrap, {
-      width: w, height: h,
+  safe(() => {
+    const chartDiv = document.getElementById('CW');
+    chartDiv.innerHTML = '';
+    
+    chart = LightweightCharts.createChart(chartDiv, {
+      autoSize: true, // SOLUCIÓN DEFINITIVA A LA PANTALLA NEGRA
       layout: { background: { type:'solid', color:'transparent' }, textColor: 'rgba(150,160,180,.8)' },
       grid: { vertLines: { color:'rgba(255,255,255,.03)' }, horzLines: { color:'rgba(255,255,255,.03)' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -930,10 +928,7 @@ function initChart() {
     });
     vSer = chart.addHistogramSeries({ priceScaleId:'vol', scaleMargins:{top:.85,bottom:0} });
     chart.priceScale('vol').applyOptions({ scaleMargins:{top:.85,bottom:0} });
-    new ResizeObserver(() => {
-      safe(() => { if (chart) { const rw = wrap.clientWidth, rh = wrap.clientHeight; if (rw>50 && rh>50) chart.applyOptions({width:rw,height:rh}); } });
-    }).observe(wrap);
-  })));
+  });
 }
 
 function clearOvr() {
@@ -942,7 +937,6 @@ function clearOvr() {
     pLines = [];
     xSer.forEach(s => { try { chart.removeSeries(s); } catch(e) {} });
     xSer = [];
-    // Limpiar líneas de Elliott
     ewLines.forEach(s => { try { chart.removeSeries(s); } catch(e) {} });
     ewLines = [];
     ewMarkersBuf = [];
@@ -950,9 +944,6 @@ function clearOvr() {
   });
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  ELLIOTT WAVE RENDERING — líneas conectadas por nivel
-// ═══════════════════════════════════════════════════════════════
 function renderElliottWaves(cc, tf) {
   safe(() => {
     if (!SH.ew || !cc || !cc.length) return;
@@ -963,16 +954,12 @@ function renderElliottWaves(cc, tf) {
 
     pats.forEach((pat, patIdx) => {
       if (!pat.pts || pat.pts.length < 2) return;
-
-      // Datos para la línea conectada
       const lineData = [];
       const markers = [];
 
       pat.pts.forEach((pt, i) => {
         if (!pt) return;
         lineData.push({ time: pt.time, value: pt.p });
-
-        // Marker en cada punto
         markers.push({
           time: pt.time,
           position: pt.t === 'H' ? 'aboveBar' : 'belowBar',
@@ -983,7 +970,6 @@ function renderElliottWaves(cc, tf) {
         });
       });
 
-      // Dibujar línea conectando los puntos de la onda
       if (lineData.length >= 2) {
         const lineSer = chart.addLineSeries({
           color: pat.ewCol,
@@ -998,14 +984,9 @@ function renderElliottWaves(cc, tf) {
         ewLines.push(lineSer);
       }
 
-      // Dibujar línea de proyección W5 si está en formación
       if (pat.pts.length === 5 && pat.dir) {
-        const lastPt = pat.pts[4];
-        const prevPt = pat.pts[3];
-        const w1Len = Math.abs(pat.pts[1].p - pat.pts[0].p);
-        const w3Len = Math.abs(pat.pts[3].p - pat.pts[2].p);
-        const projLen = w3Len * 0.618; // Proyección típica W5 = 0.618 de W1-W3
-        const projPrice = pat.dir === 'up' ? lastPt.p + projLen : lastPt.p - projLen;
+        const lastPt = pat.pts[4], prevPt = pat.pts[3], w3Len = Math.abs(pat.pts[3].p - pat.pts[2].p);
+        const projLen = w3Len * 0.618, projPrice = pat.dir === 'up' ? lastPt.p + projLen : lastPt.p - projLen;
         const lastCandle = cc[cc.length - 1];
 
         if (lastCandle && lastCandle.time > lastPt.time) {
@@ -1017,31 +998,18 @@ function renderElliottWaves(cc, tf) {
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          projSer.setData([
-            { time: lastPt.time, value: lastPt.p },
-            { time: lastCandle.time, value: projPrice }
-          ]);
+          projSer.setData([{ time: lastPt.time, value: lastPt.p }, { time: lastCandle.time, value: projPrice }]);
           xSer.push(projSer);
           ewLines.push(projSer);
         }
       }
-
-      // Aplicar markers — acumular globalmente (cSer.markers() no existe en v4)
-      if (markers.length) {
-        ewMarkersBuf.push(...markers);
-      }
+      if (markers.length) ewMarkersBuf.push(...markers);
     });
 
-    // Aplicar todos los markers juntos al final
-    if (cSer && ewMarkersBuf.length) {
-      cSer.setMarkers(ewMarkersBuf.slice().sort((a,b) => a.time - b.time));
-    }
+    if (cSer && ewMarkersBuf.length) cSer.setMarkers(ewMarkersBuf.slice().sort((a,b) => a.time - b.time));
   });
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  OVERLAYS — con debounce
-// ═══════════════════════════════════════════════════════════════
 function renderOvr() {
   if (renderDebounce) clearTimeout(renderDebounce);
   renderDebounce = setTimeout(() => safe(_renderOvr), 250);
@@ -1051,27 +1019,23 @@ function _renderOvr() {
   clearOvr();
   const cc = CC[curTF]; if (!cc || !cc.length) return;
   const cfg = TFC[curTF] || TFC['1h'];
-  const pv = calcPiv(cc);
-  const fb = calcFib(cc);
+  const pv = calcPiv(cc), fb = calcFib(cc);
 
   const addPL = (v, c, t, sty = LightweightCharts.LineStyle.Dashed) => {
     if (!isValid(v)) return;
     pLines.push(cSer.createPriceLine({ price: v, color: c, lineWidth: 1, lineStyle: sty, axisLabelVisible: true, title: t }));
   };
 
-  // Pivots
   if (SH.pv && pv) {
     [[pv.PP,'#f59e0b','PP'],[pv.R1,'#ef5350','R1'],[pv.R2,'#ef5350','R2'],[pv.S1,'#26a69a','S1'],[pv.S2,'#26a69a','S2']].forEach(([v,c,t]) => addPL(v,c,t));
     safe(() => { document.getElementById('IPP').textContent = fp(pv.PP); });
   }
 
-  // Fibonacci
   if (SH.fb && fb) {
     [[fb.H,'#26a69a','100%'],[fb.r786,'rgba(38,166,154,.45)','78.6'],[fb.r618,'#26a69a','61.8'],[fb.r500,'rgba(38,166,154,.3)','50.0'],[fb.r382,'#26a69a','38.2'],[fb.r236,'rgba(38,166,154,.2)','23.6'],[fb.L,'#26a69a','0%'],[fb.e1618,'rgba(38,166,154,.25)','161.8']].forEach(([v,c,t]) => addPL(v,c,t,LightweightCharts.LineStyle.Dotted));
     safe(() => { document.getElementById('IF6').textContent = fp(fb.r618); document.getElementById('IF3').textContent = fp(fb.r382); });
   }
 
-  // Hurst FLD + CMA
   if (SH.hr) {
     const cols = [{s:'rgba(61,126,255,.9)',c:'rgba(61,126,255,.18)'},{s:'rgba(139,92,246,.85)',c:'rgba(139,92,246,.15)'}];
     cfg.hp.slice(0,2).forEach((p,i) => {
@@ -1095,7 +1059,6 @@ function _renderOvr() {
     });
   }
 
-  // Sessions
   if (SH.sess) {
     const sl = getSessLevels(cc);
     if (sl) {
@@ -1107,17 +1070,12 @@ function _renderOvr() {
     }
   }
 
-  // VPOC
   if (SH.vpoc) {
     const vpoc = calcVPOC(cc.slice(-100));
     if (vpoc) { addPL(vpoc, '#9333ea', 'VPOC', LightweightCharts.LineStyle.Solid); safe(() => { document.getElementById('IVPC').textContent = fp(vpoc); }); }
   }
 
-  // Elliott Waves — AHORA CON LÍNEAS CONECTADAS POR NIVEL
-  if (SH.ew) {
-    renderElliottWaves(cc, curTF);
-  }
-
+  if (SH.ew) renderElliottWaves(cc, curTF);
   runSignals();
 }
 
@@ -1141,7 +1099,6 @@ function runSignals() {
     const cfg = TFC[curTF] || TFC['1h'];
     const fa = fldC(cc, cfg.hp[0]), fb2 = fldC(cc, cfg.hp[1]);
     const fldA = fa.length ? fa[fa.length-1].value : null, fldB = fb2.length ? fb2[fb2.length-1].value : null;
-    // RSI en info bar
     const rsi = calcRSI(cc);
     safe(() => {
       const el = document.getElementById('IRSI'); if (!el) return;
@@ -1192,7 +1149,6 @@ function doScalp(price, pv, fb, fldA, fldB) {
       badge.innerHTML = `<span class="di dw"></span>${sc}/4 — esperando confluencia`;
     }
 
-    // HTF cards
     const fc = (p, eid, esub) => {
       safe(() => {
         const el = document.getElementById(eid); if (!el) return;
@@ -1269,7 +1225,7 @@ function doSwing(price, pv, fb, fldA, fldB) {
         if (!mc || !mw) return;
         const p = pats[tf];
         if (!p) { mw.textContent = 'sin patrón'; mw.className = 'mc-wave'; return; }
-        const wn = Math.max(0, p.pts.length - 2); // Corrección de índice
+        const wn = Math.max(0, p.pts.length - 2);
         mw.textContent = `${p.lbl[wn]||'?'} ${p.dir==='up'?'▲':'▼'}`;
         mw.className = `mc-wave ${p.dir==='up'?'up':'dn'}`;
         const sub = mc.querySelector('.mc-sub'); if (sub) sub.textContent = `W3=${p.w3ext.toFixed(2)}×`;
@@ -1288,9 +1244,6 @@ function setEntry(en, sl, t1, t2, sig) {
   });
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  RSI — indicador adicional para el scoring
-// ═══════════════════════════════════════════════════════════════
 function calcRSI(cc, period = 14) {
   return safe(() => {
     if (cc.length < period + 1) return null;
@@ -1311,107 +1264,20 @@ function calcRSI(cc, period = 14) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  SCANNER MULTI-SÍMBOLO — corre en el navegador
+//  SCANNER MULTI-SÍMBOLO — DELEGADO AL SERVIDOR 24/7
 // ═══════════════════════════════════════════════════════════════
-const SCAN_SYMS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','LINKUSDT','AVAXUSDT','DOTUSDT'];
-const SCAN_TFS  = ['5m','1h','4h'];
 let scanResults  = {};
-let scanRunning  = false;
-const alertCooldown = {};
 
-async function fetchScanCandles(sym, tf) {
-  return await safeAsync(async () => {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=200`);
-    const d = await r.json();
-    if (!Array.isArray(d)) return null;
-    return d.map(k => ({ time:+k[0]/1000, open:+k[1], high:+k[2], low:+k[3], close:+k[4], vol:+k[5] }));
-  }, null);
-}
-
-function scoreScanSignal(cc, tf) {
-  return safe(() => {
-    if (!cc || cc.length < 60) return null;
-    const price = cc[cc.length - 1].close;
-    const pv  = calcPiv(cc);
-    const fb  = calcFib(cc);
-    const cfg = TFC[tf] || TFC['1h'];
-    const fa  = fldC(cc, cfg.hp[0]);
-    const fb2 = fldC(cc, cfg.hp[1]);
-    const fldA = fa.length  ? fa[fa.length-1].value  : null;
-    const fldB = fb2.length ? fb2[fb2.length-1].value : null;
-    const rsi  = calcRSI(cc);
-
-    let fldDir = null;
-    if (fldA && fldB) {
-      const aa = price > fldA, ab = price > fldB;
-      if (aa && ab) fldDir = 'up';
-      else if (!aa && !ab) fldDir = 'dn';
-    }
-
-    const inFib  = fb && price >= fb.r618 && price <= fb.r382;
-    let pvOk = false;
-    if (pv) for (const v of [pv.PP, pv.R1, pv.S1, pv.R2, pv.S2])
-      if (Math.abs(price - v) / price < 0.008) { pvOk = true; break; }
-
-    const vpoc   = calcVPOC(cc.slice(-100));
-    const nearV  = vpoc && Math.abs(price - vpoc) / price < 0.006;
-    const rsiOk  = rsi && ((fldDir === 'up' && rsi < 65) || (fldDir === 'dn' && rsi > 35));
-
-    const score = [fldDir !== null, inFib, pvOk, nearV, rsiOk].filter(Boolean).length;
-    const dir   = fldDir;
-
-    if (score >= 3 && dir) {
-      return {
-        signal: dir === 'up' ? 'LONG' : 'SHORT',
-        score, max: 5, dir, price, rsi: rsi ? rsi.toFixed(1) : '—',
-        entry: dir === 'up' ? fb.r618 : fb.r382,
-        sl:    dir === 'up' ? fb.L    : fb.H,
-        t1:    dir === 'up' ? fb.r382 : fb.r618,
-        t2:    dir === 'up' ? fb.r236 : fb.r786,
-        vpoc, rules: { fldDir, inFib, pvOk, nearV, rsiOk },
-      };
-    }
-    return { signal: 'WAIT', score, max: 5, dir, price, rsi: rsi ? rsi.toFixed(1) : '—' };
-  }, null);
-}
-
-async function runScanCycle() {
-  if (scanRunning) return;
-  scanRunning = true;
-  safe(() => { document.getElementById('EDOT').className = 'edot on'; document.getElementById('EMSG').textContent = 'Scanner: activo'; });
-
-  const signals = [];
-  for (const sym of SCAN_SYMS) {
-    for (const tf of SCAN_TFS) {
-      await new Promise(r => setTimeout(r, 300));
-      const cc  = await fetchScanCandles(sym, tf);
-      if (!cc) continue;
-      const sig = scoreScanSignal(cc, tf);
-      if (!sig || sig.signal === 'WAIT') continue;
-
-      signals.push({ sym, tf, ...sig });
-
-      // Auto-alerta Telegram si score >= 4
-      const key = `${sym}-${tf}`;
-      const now = Date.now();
-      if (sig.score >= 4 && (!alertCooldown[key] || now - alertCooldown[key] > 10 * 60 * 1000)) {
-        alertCooldown[key] = now;
-        autoSendTG(sym, tf, sig);
-      }
-    }
-  }
-
-  scanResults = signals;
-  renderScanResults(signals);
-  scanRunning = false;
-  safe(() => { document.getElementById('SCTS').textContent = 'Act. ' + new Date().toLocaleTimeString('es-MX'); });
+async function refreshScanner() {
+  safe(() => { document.getElementById('SCLIST').innerHTML = '<div class="scan-load">Sincronizando con servidor...</div>'; });
+  await pollServer();
 }
 
 function renderScanResults(signals) {
   safe(() => {
     const el = document.getElementById('SCLIST');
-    if (!signals.length) {
-      el.innerHTML = '<div class="scan-load" style="opacity:.5">Sin señales activas</div>'; return;
+    if (!signals || !signals.length) {
+      el.innerHTML = '<div class="scan-load" style="opacity:.5">Sin señales activas en servidor</div>'; return;
     }
     el.innerHTML = signals.map(s => {
       const isL = s.signal === 'LONG';
@@ -1420,81 +1286,58 @@ function renderScanResults(signals) {
       ).join('');
       return `<div class="scan-card${isL ? ' sig-long' : ' sig-short'}" onclick="safe(()=>{document.getElementById('SYM').value='${s.sym}';fullReload()})">
         <div class="sc-top">
-          <span class="sc-sym">${s.sym.replace('USDT','')}</span>
-          <span class="sc-tf">${s.tf}</span>
+          <span class="sc-sym">${(s.sym || '').replace('USDT','')}</span>
+          <span class="sc-tf">${s.tf || ''}</span>
         </div>
         <div class="sc-dots">${dots}</div>
         <div class="sc-dir ${isL ? 'up' : 'dn'}">${isL ? '▲ LONG' : '▼ SHORT'} · ${s.score}/${s.max}</div>
         <div class="sc-price">${fp(s.price)}</div>
-        <div class="sc-detail">RSI ${s.rsi} · Entrada ${fp(s.entry)}</div>
+        <div class="sc-detail">Entrada ${fp(s.entry)}</div>
       </div>`;
     }).join('');
   });
 }
 
-async function autoSendTG(sym, tf, sig) {
-  await safeAsync(async () => {
-    const cfg = JSON.parse(localStorage.getItem('tdp-tg') || '{}');
-    if (!cfg.token || !cfg.chatId) return;
-    const emoji = sig.signal === 'LONG' ? '🟢' : '🔴';
-    const time  = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
-    const text  = `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>
-
-🕐 <b>Hora MX:</b> ${time}
-📊 <b>Confluencia:</b> ${sig.score}/${sig.max} condiciones
-${sig.dir === 'up' ? '▲' : '▼'} <b>RSI:</b> ${sig.rsi}
-
-💰 <b>Niveles:</b>
-  • Entrada:  <code>${fp(sig.entry)}</code>
-  • Stop:     <code>${fp(sig.sl)}</code>
-  • Target 1: <code>${fp(sig.t1)}</code>
-  • Target 2: <code>${fp(sig.t2)}</code>
-
-${sig.rules.fldDir ? '✅' : '❌'} FLD: ${sig.rules.fldDir || '—'}
-${sig.rules.inFib    ? '✅' : '❌'} Zona Fibonacci 38.2–61.8%
-${sig.rules.pvOk     ? '✅' : '❌'} Confluencia Pivote
-${sig.rules.nearV    ? '✅' : '❌'} Proximidad VPOC
-${sig.rules.rsiOk    ? '✅' : '❌'} RSI confirmado
-
-⚠️ <i>Sistema automático. Valida siempre con tu análisis personal.</i>`;
-    await fetch('/api/telegram', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: cfg.token, chatId: cfg.chatId, text }),
-    });
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  SERVER POLL + SCANNER INIT
-// ═══════════════════════════════════════════════════════════════
 async function pollServer() {
   await safeAsync(async () => {
-    await fetch('/api/state');
+    const r = await fetch('/api/state');
+    const d = await r.json();
     safe(() => {
-      document.getElementById('EDOT').className = 'edot on';
-      document.getElementById('EMSG').textContent = 'Motor: activo';
+      document.getElementById('EDOT').className = d.engineRunning ? 'edot on' : 'edot';
+      document.getElementById('EMSG').textContent = `Servidor: Scan #${d.scanCount}`;
       document.getElementById('ENG-NOTICE').className = 'eng-notice eng-ok';
-      document.getElementById('ENG-TXT').textContent = '🌐 Scanner multi-par activo en tu navegador. Alertas Telegram automáticas con score ≥ 4/5.';
+      document.getElementById('ENG-TXT').textContent = '🌐 Motor 24/7 operando en el servidor. Alertas directas activas.';
+      
+      if (d.signals && Object.keys(d.signals).length > 0) {
+         renderScanResults(Object.values(d.signals));
+      } else {
+         renderScanResults([]);
+      }
+      document.getElementById('SCTS').textContent = 'Act. ' + new Date().toLocaleTimeString('es-MX');
     });
   });
 }
 
-async function refreshScanner() {
-  safe(() => { document.getElementById('SCLIST').innerHTML = '<div class="scan-load">Escaneando mercado...</div>'; });
-  await runScanCycle();
-}
-
 // ═══════════════════════════════════════════════════════════════
-//  TELEGRAM
+//  TELEGRAM (UI Tests and Config)
 // ═══════════════════════════════════════════════════════════════
 async function sendTG(text) {
   return await safeAsync(async () => {
     const cfg = JSON.parse(localStorage.getItem('tdp-tg') || '{}');
     if (!cfg.token || !cfg.chatId) return false;
-    const r = await fetch('/api/telegram', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token:cfg.token, chatId:cfg.chatId, text}) });
+    
+    const r = await fetch('/api/telegram', { 
+      method:'POST', 
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization': `Bearer ${pwdHash}`
+      }, 
+      body: JSON.stringify({token:cfg.token, chatId:cfg.chatId, text}) 
+    });
     const d = await r.json(); return d.ok === true;
   }, false);
 }
+
 function saveTG() {
   safe(() => {
     const t = document.getElementById('TT').value.trim(), c = document.getElementById('TC').value.trim();
@@ -1504,12 +1347,21 @@ function saveTG() {
     closeM('TGM');
   });
 }
+
 async function testTG() {
   await safeAsync(async () => {
     const t = document.getElementById('TT').value.trim(), c = document.getElementById('TC').value.trim();
     if (!t || !c) { showMst('TGST','err','Completa los campos'); return; }
     showMst('TGST','ok','Enviando...');
-    const r = await fetch('/api/telegram', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token:t, chatId:c, text:`✅ <b>Test OK — Trading Dashboard PRO v6</b>\n🕐 ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}\n\n🌐 Scanner multi-par activo (10 pares × 3 TFs).\n📡 Alertas automáticas: score ≥ 4/5 condiciones.\n📊 Motor: FLD + Fibonacci + Pivotes + VPOC + RSI`}) });
+    
+    const r = await fetch('/api/telegram', { 
+      method:'POST', 
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization': `Bearer ${pwdHash}`
+      }, 
+      body: JSON.stringify({token:t, chatId:c, text:`✅ <b>Test OK — Trading Dashboard PRO v6</b>\n🕐 ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}\n\n🌐 Scanner Autónomo configurado.`}) 
+    });
     const d = await r.json();
     d.ok ? showMst('TGST','ok','✓ Telegram funcionando correctamente') : showMst('TGST','err','Error — verifica token y Chat ID');
   });
@@ -1587,26 +1439,46 @@ function renderJ() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  DATA FETCH + WEBSOCKET — robusto
+//  DATA FETCH + WEBSOCKET
 // ═══════════════════════════════════════════════════════════════
 async function fetchCC(tf, sym) {
-  return await safeAsync(async () => {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=300`, { timeout: 15000 });
-    const d = await r.json();
-    if (!Array.isArray(d)) return null;
-    return d.map(k => ({ time:+k[0]/1000, open:+k[1], high:+k[2], low:+k[3], close:+k[4], vol:+k[5] }));
-  }, null);
+  const endpoints = [
+    'https://data-api.binance.vision/api/v3/klines',
+    'https://api.binance.com/api/v3/klines',
+    'https://api1.binance.com/api/v3/klines'
+  ];
+  for (const base of endpoints) {
+    try {
+      const r = await fetch(`${base}?symbol=${sym}&interval=${tf}&limit=300`);
+      if (r.ok) {
+        const d = await r.json();
+        if (Array.isArray(d)) return d.map(k => ({ time:+k[0]/1000, open:+k[1], high:+k[2], low:+k[3], close:+k[4], vol:+k[5] }));
+      }
+    } catch(e) {}
+  }
+  return null;
 }
 
 async function fullReload() {
   await safeAsync(async () => {
     curSym = document.getElementById('SYM').value; CC = {};
-    connectWS();
+    
+    safe(() => { document.getElementById('CW-LOAD').classList.remove('H'); });
+    
+    if (ws) { try { ws.onclose = null; ws.close(); ws = null; } catch(e) {} }
+    if (wsT) { clearTimeout(wsT); wsT = null; }
+    setWS(false, 'Descargando...');
+
     const tfs = ['1m','5m','15m','1h','4h','1d'];
     const results = await Promise.all(tfs.map(tf => fetchCC(tf, curSym)));
     tfs.forEach((tf, i) => { if (results[i]) CC[tf] = results[i]; });
     await loadMacros(curSym);
+    
     setChartData();
+    safe(() => { document.getElementById('CW-LOAD').classList.add('H'); });
+    
+    connectWS();
+
     clearInterval(window._mI); window._mI = setInterval(() => loadMacros(curSym), 60000);
     const cfg = JSON.parse(localStorage.getItem('tdp-tg') || '{}');
     if (cfg.token) {
@@ -1625,12 +1497,10 @@ function setChartData() {
     cSer.setData(cc.map(c => ({time:c.time, open:c.open, high:c.high, low:c.low, close:c.close})));
     vSer.setData(cc.map(c => ({time:c.time, value:c.vol, color:c.close>=c.open?'rgba(38,166,154,.3)':'rgba(239,83,80,.3)'})));
     updatePrice(cc[cc.length-1].close);
-    const wrap = document.getElementById('CW');
-    const W = wrap.clientWidth || wrap.offsetWidth;
-    const H = wrap.clientHeight || wrap.offsetHeight;
-    if (W > 10 && H > 10) chart.resize(W, H);
+    
     chart.timeScale().fitContent();
     renderOvr();
+    
     document.querySelectorAll('.mc').forEach(c => c.classList.remove('act'));
     const ac = document.getElementById('mc-'+curTF); if (ac) ac.classList.add('act');
   });
@@ -1638,10 +1508,6 @@ function setChartData() {
 
 function connectWS() {
   safe(() => {
-    if (ws) { try { ws.onclose = null; ws.close(); } catch(e) {} }
-    if (wsT) { clearTimeout(wsT); wsT = null; }
-    setWS(false, 'Conectando...');
-
     try {
       ws = new WebSocket(`wss://stream.binance.com:9443/ws/${curSym.toLowerCase()}@kline_${curTF}`);
 
@@ -1742,11 +1608,6 @@ function initDashboard() {
     initChart(); buildTFR(MC[curMode]); buildLayR(MC[curMode]);
     updateSess(); fullReload();
     pollServer(); setInterval(() => safe(pollServer), 30000);
-    // Iniciar scanner multi-símbolo con retraso para no bloquear la carga inicial
-    setTimeout(() => {
-      runScanCycle();
-      setInterval(() => runScanCycle(), 3 * 60 * 1000); // cada 3 min
-    }, 5000);
   });
 }
 window.addEventListener('load', initAuth);
