@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  server.js  —  Trading Dashboard PRO v5  (Frontend-First Edition)
+//  server.js  —  Trading Dashboard PRO v6  (Frontend-First Edition)
 //  El servidor solo sirve archivos estáticos y proxyea Telegram.
 //  TODO el análisis y datos vienen del navegador del usuario.
 // ═══════════════════════════════════════════════════════════════
@@ -47,7 +47,7 @@ app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html
 app.listen(CONFIG.port, '0.0.0.0', () => {
   console.log(`
 ╔══════════════════════════════════════════╗
-║  Trading Dashboard PRO v5                ║
+║  Trading Dashboard PRO v6                ║
 ║  Modo   : Frontend-First (sin scanner)   ║
 ║  Puerto : ${CONFIG.port}                          ║
 ╚══════════════════════════════════════════╝
