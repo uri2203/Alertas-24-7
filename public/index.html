@@ -727,7 +727,9 @@ function calcFib(cc, lb=150) {
 function calcVPOC(cc, bk=50) {
   return safe(() => {
     if (!cc || cc.length < 10) return null;
-    const H = Math.max(...cc.map(c => c.high)), L = Math.min(...cc.map(c => c.low)), st = (H-L)/bk;
+    const H = Math.max(...cc.map(c => c.high)), L = Math.min(...cc.map(c => c.low));
+    if (H === L) return L; // FIX: Prevent division by zero
+    const st = (H-L)/bk;
     const bins = new Array(bk).fill(0);
     cc.forEach(c => { bins[Math.min(bk-1, Math.floor(((c.high+c.low)/2 - L)/st))] += c.vol; });
     const mx = bins.indexOf(Math.max(...bins));
@@ -1267,7 +1269,7 @@ function doSwing(price, pv, fb, fldA, fldB) {
         if (!mc || !mw) return;
         const p = pats[tf];
         if (!p) { mw.textContent = 'sin patrón'; mw.className = 'mc-wave'; return; }
-        const wn = p.pts.length - 1;
+        const wn = Math.max(0, p.pts.length - 2); // Corrección de índice
         mw.textContent = `${p.lbl[wn]||'?'} ${p.dir==='up'?'▲':'▼'}`;
         mw.className = `mc-wave ${p.dir==='up'?'up':'dn'}`;
         const sub = mc.querySelector('.mc-sub'); if (sub) sub.textContent = `W3=${p.w3ext.toFixed(2)}×`;
@@ -1448,7 +1450,7 @@ ${sig.dir === 'up' ? '▲' : '▼'} <b>RSI:</b> ${sig.rsi}
   • Target 1: <code>${fp(sig.t1)}</code>
   • Target 2: <code>${fp(sig.t2)}</code>
 
-✅ FLD: ${sig.rules.fldDir || '—'}
+${sig.rules.fldDir ? '✅' : '❌'} FLD: ${sig.rules.fldDir || '—'}
 ${sig.rules.inFib    ? '✅' : '❌'} Zona Fibonacci 38.2–61.8%
 ${sig.rules.pvOk     ? '✅' : '❌'} Confluencia Pivote
 ${sig.rules.nearV    ? '✅' : '❌'} Proximidad VPOC
