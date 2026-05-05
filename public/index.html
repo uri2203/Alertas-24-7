@@ -559,7 +559,7 @@ const THEMES = [
   { id:'th-arctic',     nm:'Arctic',    bg:'#eef3fb', acc:'#1a5fff' },
   { id:'th-parchment',  nm:'Parchment', bg:'#f5f0e6', acc:'#a85000' },
 ];
-let curTheme = localStorage.getItem('tdp-theme') || '';
+let curTheme = localStorage.getItem('tdp-theme') || 'th-midnight';
 
 function applyTheme(id) {
   safe(() => {
@@ -569,7 +569,8 @@ function applyTheme(id) {
     THEMES.forEach(t => { if (t.id) app.classList.remove(t.id); });
     if (id) app.classList.add(id);
     ['THS','LTH'].forEach(buildSwatches);
-    if (chart) chart.applyOptions({ layout: { background: { type:'solid', color:'transparent' } } });
+    const bg = THEMES.find(t => t.id === id)?.bg || '#0b0b0b';
+    if (chart) chart.applyOptions({ layout: { background: { type:'solid', color: bg } } });
   });
 }
 
@@ -594,7 +595,7 @@ async function sha256(msg) {
 }
 async function initAuth() {
   safe(() => buildSwatches('LTH'));
-  safe(() => document.getElementById('APP').classList.add(curTheme));
+  safe(() => { if (curTheme) document.getElementById('APP').classList.add(curTheme); });
   try {
     const r = await fetch('/api/config');
     const d = await r.json();
@@ -1622,7 +1623,6 @@ function setChartData() {
     cSer.setData(cc.map(c => ({time:c.time, open:c.open, high:c.high, low:c.low, close:c.close})));
     vSer.setData(cc.map(c => ({time:c.time, value:c.vol, color:c.close>=c.open?'rgba(38,166,154,.3)':'rgba(239,83,80,.3)'})));
     updatePrice(cc[cc.length-1].close);
-    // Forzar resize con dimensiones reales del contenedor
     const wrap = document.getElementById('CW');
     const W = wrap.clientWidth || wrap.offsetWidth;
     const H = wrap.clientHeight || wrap.offsetHeight;
