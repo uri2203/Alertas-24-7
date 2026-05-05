@@ -30,7 +30,7 @@ let scanCount = 0;
 let totalSignals = 0;
 
 // ── FETCH ────────────────────────────────────────────────────────
-async function fetchCandles(symbol, interval, limit = 250) {
+async function fetchCandles(symbol, interval, limit = 500) {
   const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
