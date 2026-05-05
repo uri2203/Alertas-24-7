@@ -79,7 +79,7 @@ export function calcVPOC(candles, buckets = 50) {
   if (!candles || candles.length < 10) return null;
   const H    = Math.max(...candles.map(c => c.high));
   const L    = Math.min(...candles.map(c => c.low));
-  if (H === L) return L; // Corrección: División por cero evitada
+  if (H === L) return L;
   const step = (H - L) / buckets;
   const bins = new Array(buckets).fill(0);
   candles.forEach(c => {
@@ -157,6 +157,11 @@ export function detectElliott(candles, tf, TF_CONFIG) {
 }
 
 // ── SIGNAL SCORING (server-side, used for 24/7 alerts) ───────────
+// Lógica alineada exactamente con el frontend (index.html):
+//   - Score sobre 4 condiciones: FLD + Fibonacci + Pivote + Elliott
+//   - VPOC se calcula y se reporta pero NO cuenta para el score
+//   - Tolerancia de pivotes: ±0.5% (igual que el panel principal)
+//   - Elliott cuenta si existe al menos 1 onda detectada en el TF
 // Returns { signal, score, max, dir, price, entry, sl, t1, t2, vpoc, rules }
 export function scoreSignal(candles, tf, TF_CONFIG) {
   if (!candles || candles.length < 60) return null;
@@ -167,7 +172,7 @@ export function scoreSignal(candles, tf, TF_CONFIG) {
   const vpoc  = calcVPOC(candles.slice(-100));
   const hp    = (TF_CONFIG[tf] || TF_CONFIG['1h']).hurstP;
 
-  // FLD direction
+  // ── 1. FLD direction (igual que frontend) ──────────────────────
   const fdA     = calcFLD(candles, hp[0]);
   const fdB     = calcFLD(candles, hp[1]);
   const fldAval = fdA.length ? fdA[fdA.length - 1].value : null;
@@ -175,25 +180,27 @@ export function scoreSignal(candles, tf, TF_CONFIG) {
   let   fldDir  = null;
   if (fldAval && fldBval) {
     const aa = price > fldAval, ab = price > fldBval;
-    if (aa && ab)   fldDir = 'up';
+    if (aa && ab)        fldDir = 'up';
     else if (!aa && !ab) fldDir = 'dn';
   }
 
-  // Fibonacci golden zone
+  // ── 2. Fibonacci golden zone (igual que frontend) ───────────────
   const inFib = fib && price >= fib.r618 && price <= fib.r382;
 
-  // Pivot confluence
+  // ── 3. Pivot confluence — tolerancia ±0.5% (igual que frontend) ─
   let pvOk = false;
   if (piv) {
-    for (const v of [piv.PP, piv.R1, piv.S1, piv.R2, piv.S2])
-      if (Math.abs(price - v) / price < 0.008) { pvOk = true; break; }
+    for (const v of [piv.PP, piv.R1, piv.S1])
+      if (Math.abs(price - v) / price < 0.005) { pvOk = true; break; }
   }
 
-  // VPOC proximity
-  const nearVPOC = vpoc && Math.abs(price - vpoc) / price < 0.006;
+  // ── 4. Elliott Wave detectada en este TF (igual que frontend) ───
+  const waves  = detectElliott(candles, tf, TF_CONFIG);
+  const w1ok   = waves && waves.length > 0;
 
-  const rules = { fldDir, inFib, pvOk, nearVPOC };
-  const score = [fldDir !== null, inFib, pvOk, nearVPOC].filter(Boolean).length;
+  // ── SCORE FINAL (4 condiciones, igual que frontend) ─────────────
+  const rules = { fldDir, inFib, pvOk, w1ok, nearVPOC: vpoc && Math.abs(price - vpoc) / price < 0.006 };
+  const score = [fldDir !== null, inFib, pvOk, w1ok].filter(Boolean).length;
   const max   = 4;
   const dir   = fldDir;
 
