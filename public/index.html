@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- INYECCIÓN ANTI-CACHE ESTRICTA -->
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
@@ -26,7 +27,8 @@
 html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-family:'Courier New',monospace;font-size:12px;overflow:hidden}
 
 /* ═══ LOGIN COMPOSITING ════════════ */
-#LS{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:9000;}
+#LS{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:9000;transition:opacity 0.3s ease, visibility 0.3s ease;}
+#LS.H{opacity:0;visibility:hidden;pointer-events:none;}
 .l-box{background:var(--bg2);border:.5px solid var(--b2);border-radius:14px;padding:2.5rem 2rem;width:310px;text-align:center}
 .l-logo{font-size:9px;font-weight:700;letter-spacing:.2em;color:var(--acc);margin-bottom:.4rem;text-transform:uppercase}
 .l-title{font-size:24px;font-weight:700;letter-spacing:-.02em;margin-bottom:.15rem}
@@ -39,7 +41,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-famil
 .l-th{display:flex;align-items:center;gap:8px;font-size:8px;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em}
 
 /* ═══ APP GRID ═══════════ */
-#APP{display:none;height:100vh;width:100vw;grid-template-rows:40px 28px 1fr;overflow:hidden;background:var(--bg);}
+#APP{position:fixed;inset:0;display:grid;grid-template-rows:40px 28px 1fr;overflow:hidden;background:var(--bg);z-index:1;}
 
 /* ═══ HEADER ═══════════════════════════════ */
 .hdr{display:flex;align-items:center;gap:5px;padding:0 10px;background:var(--bg2);border-bottom:.5px solid var(--b1);overflow:hidden}
@@ -132,26 +134,26 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-famil
 .ds{background:var(--red);animation:pu 1s infinite}
 .dw{background:var(--tx3)}
 
-/* Chart & Loaders (CORREGIDO Y REINTRODUCIDO EN .LEFT) */
-.cw-wrap{flex:1;min-height:220px;min-width:0;background:var(--bg2);border-radius:5px;overflow:hidden;position:relative;z-index:1;margin-bottom:4px;}
+/* Chart & Loaders */
+.cw-wrap{flex:1;min-height:220px;min-width:0;background:var(--bg2);border-radius:5px;overflow:hidden;position:relative;z-index:1}
 #CW{position:absolute;inset:0;width:100%;height:100%;}
 #CW-LOAD{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85);z-index:10;color:var(--acc);font-weight:700;font-size:14px;letter-spacing:.05em;backdrop-filter:blur(3px);transition:opacity .25s;pointer-events:none}
-#CW-LOAD.H{opacity:0; pointer-events:none;}
+#CW-LOAD.H{opacity:0}
 
 /* Entry box */
-.ebox{background:var(--bg2);border:.5px solid var(--b1);border-radius:5px;padding:6px 9px;margin-bottom:4px;}
+.ebox{background:var(--bg2);border:.5px solid var(--b1);border-radius:5px;padding:6px 9px}
 .e-title{font-size:7px;text-transform:uppercase;letter-spacing:.07em;color:var(--tx2);margin-bottom:4px}
 .e-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
 .eg .el{font-size:7px;color:var(--tx2)}
 .eg .ev{font-size:11px;font-weight:700;margin-top:1px}
 
 /* Info bar */
-.ibar{display:flex;gap:8px;flex-wrap:wrap;padding:5px 8px;background:var(--bg2);border:.5px solid var(--b1);border-radius:5px;}
+.ibar{display:flex;gap:8px;flex-wrap:wrap;padding:5px 8px;background:var(--bg2);border:.5px solid var(--b1);border-radius:5px}
 .ic .lbl{font-size:7px;color:var(--tx2);text-transform:uppercase;letter-spacing:.05em;display:block}
 .ic .val{font-weight:700;font-size:10px}
 
 /* Engine notice */
-.eng-notice{display:flex;align-items:center;gap:5px;padding:4px 8px;border-radius:4px;font-size:9px;border:.5px solid;margin-bottom:4px;}
+.eng-notice{display:flex;align-items:center;gap:5px;padding:4px 8px;border-radius:4px;font-size:9px;border:.5px solid}
 .eng-ok{background:var(--acc-bg);color:var(--acc);border-color:var(--acc)}
 .eng-warn{background:rgba(245,158,11,.08);color:var(--gld);border-color:var(--gld)}
 
@@ -380,7 +382,7 @@ tr:hover td{background:var(--bg3)}
         <span>🖥️</span><span id="ENG-TXT">Motor servidor: verificando telemetría...</span>
       </div>
 
-      <!-- CHART BLINDADO (DENTRO DE LA COLUMNA LEFT) -->
+      <!-- CHART BLINDADO CON WRAPPER RELATIVO Y LOADER -->
       <div class="cw-wrap" id="CW-WRAP">
         <div id="CW-LOAD">Dibujando Interfaz Gráfica...</div>
         <div id="CW"></div>
@@ -593,7 +595,7 @@ function buildSwatches(cid) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  AUTH & INIT
+//  AUTH & INIT (ARQUITECTURA LAZY-MOUNT)
 // ═══════════════════════════════════════════════════════════════
 let pwdHash = null;
 async function sha256(msg) {
@@ -636,14 +638,14 @@ async function doLogin() {
 
 function showApp() {
   safe(() => {
-    document.getElementById('LS').style.display = 'none';
-    document.getElementById('APP').style.display = 'grid'; // REVELA LA ESTRUCTURA GRID REAL
+    document.getElementById('LS').classList.add('H');
     buildSwatches('THS');
     
-    // RETARDO PARA PINTADO SEGURO
+    // BLOQUEO ESTRICTO: El dashboard solo se inicializa DESPUÉS de que la 
+    // pantalla de login ha terminado su transición CSS (0.3s) y el DOM está expuesto al 100%.
     if (!window.dashboardInited) {
         window.dashboardInited = true;
-        setTimeout(initDashboard, 150);
+        setTimeout(() => initDashboard(), 400); 
     }
   });
 }
@@ -917,7 +919,7 @@ function liveUpdateMacro(price) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  CHART (CONTENCIÓN ESTRICTA - RETARDO ASEGURADO)
+//  CHART (BLINDADO CON LAZY-MOUNT)
 // ═══════════════════════════════════════════════════════════════
 function initChart() {
   const wrap = document.getElementById('CW-WRAP');
@@ -926,8 +928,7 @@ function initChart() {
   const w = wrap.clientWidth;
   const h = wrap.clientHeight;
 
-  // REGLA CRÍTICA: NO inyectar WebGL si el DOM no ha calculado la caja en Flexbox.
-  if (w < 10 || h < 10) {
+  if (w === 0 || h === 0) {
     setTimeout(initChart, 50);
     return;
   }
