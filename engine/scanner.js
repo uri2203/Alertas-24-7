@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 //  engine/scanner.js
 //  Motor de Escaneo Autónomo (Servidor 24/7)
+//  — Al final de cada ciclo elimina señales que ya no son activas
 // ═══════════════════════════════════════════════════════════════
 import { scoreSignal, TF_CONFIG } from './signals.js';
 import { sendTelegram, buildAlertMessage } from './telegram.js';
@@ -9,8 +10,8 @@ export const STATE = {
   signals:       {},
   prices:        {},
   lastScan:      null,
-  daemonActive:  false, // Verdadero siempre que el servidor esté vivo
-  isScanning:    false, // Verdadero solo cuando hace peticiones a Binance
+  daemonActive:  false,
+  isScanning:    false,
   scanCount:     0,
   errors:        [],
 };
@@ -54,20 +55,25 @@ async function runCycle(config) {
 
   console.log(`\n[SCAN #${STATE.scanCount}] Iniciando ciclo autónomo en servidor...`);
 
+  // Mapa temporal: guarda qué claves tuvieron señal activa en este ciclo
+  const activeThisCycle = new Set();
+
   for (const sym of config.symbols) {
     for (const tf of config.tfs) {
+      const key = `${sym}-${tf}`;
       try {
         const candles = await fetchCandles(sym, tf);
         const sig = scoreSignal(candles, tf, TF_CONFIG);
 
         if (candles && candles.length) {
-            STATE.prices[sym] = candles[candles.length - 1].close;
+          STATE.prices[sym] = candles[candles.length - 1].close;
         }
 
-        if (!sig || sig.signal === 'WAIT') continue;
-        if (sig.score < 4) continue;
+        // Si no hay señal activa, saltamos — la clave no entra en activeThisCycle
+        if (!sig || sig.signal === 'WAIT' || sig.score < 3) continue;
 
-        const key = `${sym}-${tf}`;
+        // Señal activa: registrar y marcar
+        activeThisCycle.add(key);
         STATE.signals[key] = { sym, tf, ...sig };
 
         const now = Date.now();
@@ -77,33 +83,45 @@ async function runCycle(config) {
           alertCooldown[key] = now;
           const text = buildAlertMessage(sym, tf, sig);
           if (config.telegram.token && config.telegram.chatId) {
-             const result = await sendTelegram(config.telegram.token, config.telegram.chatId, text);
-             if (result.ok) {
-               console.log(`   ✅ [ALERTA ENVIADA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/5)`);
-             } else {
-               console.log(`   ❌ [ERR TELEGRAM] ${JSON.stringify(result)}`);
-             }
+            const result = await sendTelegram(config.telegram.token, config.telegram.chatId, text);
+            if (result.ok) {
+              console.log(`   ✅ [ALERTA ENVIADA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/4)`);
+            } else {
+              console.log(`   ❌ [ERR TELEGRAM] ${JSON.stringify(result)}`);
+            }
           }
         }
+
       } catch (e) {
         console.error(`   [ERR] Scanner ${sym}/${tf}: ${e.message}`);
       }
-      await new Promise(r => setTimeout(r, 600)); // Retardo anti-bloqueo
+      await new Promise(r => setTimeout(r, 600));
     }
   }
 
+  // ── LIMPIEZA: eliminar señales que ya no están activas ──────────
+  const before = Object.keys(STATE.signals).length;
+  for (const key of Object.keys(STATE.signals)) {
+    if (!activeThisCycle.has(key)) {
+      delete STATE.signals[key];
+    }
+  }
+  const removed = before - Object.keys(STATE.signals).length;
+  if (removed > 0) {
+    console.log(`   🧹 ${removed} señal(es) vencida(s) eliminada(s).`);
+  }
+
   STATE.isScanning = false;
-  console.log(`[SCAN #${STATE.scanCount}] Ciclo completado. Motor en espera.`);
+  console.log(`[SCAN #${STATE.scanCount}] Ciclo completado. Señales activas: ${Object.keys(STATE.signals).length}`);
 }
 
 export function startScanner(config) {
   console.log('╔══════════════════════════════════════════╗');
   console.log('║  Motor Autónomo 24/7 INICIADO            ║');
   console.log('╚══════════════════════════════════════════╝');
-  
+
   STATE.daemonActive = true;
-  
-  // Ejecución inmediata y bucle cada 3 minutos
+
   runCycle(config);
   setInterval(() => runCycle(config), 3 * 60 * 1000);
 }
