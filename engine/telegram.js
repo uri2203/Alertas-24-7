@@ -37,7 +37,6 @@ ${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}
 
 export async function sendTelegram(token, chatId, text) {
   try {
-    const { default: fetch } = await import('node-fetch');
     const res  = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
