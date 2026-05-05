@@ -7,7 +7,7 @@
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 /* ═══════════════════════════════════════════
-   THEME SYSTEM — 2 dark + 2 light
+   THEME SYSTEM
 ═══════════════════════════════════════════ */
 :root{
   --bg:#0e1117;--bg2:#141a24;--bg3:#1a2130;--bg4:#1f2840;--bg5:#253050;
@@ -22,8 +22,8 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-family:'Courier New',monospace;font-size:12px;overflow:hidden}
 
-/* ═══ LOGIN COMPOSITING (FIXED) ════════════ */
-#LS{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:9000;transition:opacity 0.4s ease, visibility 0.4s ease;}
+/* ═══ LOGIN COMPOSITING ════════════ */
+#LS{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:9000;transition:opacity 0.3s ease, visibility 0.3s ease;}
 #LS.H{opacity:0;visibility:hidden;pointer-events:none;}
 .l-box{background:var(--bg2);border:.5px solid var(--b2);border-radius:14px;padding:2.5rem 2rem;width:310px;text-align:center}
 .l-logo{font-size:9px;font-weight:700;letter-spacing:.2em;color:var(--acc);margin-bottom:.4rem;text-transform:uppercase}
@@ -36,7 +36,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-famil
 .l-err{font-size:10px;color:var(--red);margin-top:.5rem;min-height:14px}
 .l-th{display:flex;align-items:center;gap:8px;font-size:8px;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em}
 
-/* ═══ APP GRID (ALWAYS RENDERED) ═══════════ */
+/* ═══ APP GRID ═══════════ */
 #APP{position:fixed;inset:0;display:grid;grid-template-rows:40px 28px 1fr;overflow:hidden;background:var(--bg);z-index:1;}
 
 /* ═══ HEADER ═══════════════════════════════ */
@@ -133,7 +133,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-famil
 /* Chart & Loaders */
 .cw-wrap{flex:1;min-height:220px;min-width:0;background:var(--bg2);border-radius:5px;overflow:hidden;position:relative;z-index:1}
 #CW{position:absolute;inset:0;width:100%;height:100%;}
-#CW-LOAD{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.65);z-index:10;color:var(--acc);font-weight:700;font-size:14px;letter-spacing:.05em;backdrop-filter:blur(3px);transition:opacity .25s;pointer-events:none}
+#CW-LOAD{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85);z-index:10;color:var(--acc);font-weight:700;font-size:14px;letter-spacing:.05em;backdrop-filter:blur(3px);transition:opacity .25s;pointer-events:none}
 #CW-LOAD.H{opacity:0}
 
 /* Entry box */
@@ -305,7 +305,7 @@ tr:hover td{background:var(--bg3)}
     <div class="sep"></div>
     <div class="eng-row">
       <span class="edot" id="EDOT"></span>
-      <span id="EMSG">Motor: iniciando...</span>
+      <span id="EMSG">Motor: Verificando...</span>
       <span class="sep"></span>
       <span class="wdot" id="WDOT"></span>
       <span id="WMSG">WS...</span>
@@ -375,12 +375,12 @@ tr:hover td{background:var(--bg3)}
 
       <!-- SERVER ENGINE NOTICE -->
       <div class="eng-notice eng-warn" id="ENG-NOTICE">
-        <span>🖥️</span><span id="ENG-TXT">Motor servidor: verificando...</span>
+        <span>🖥️</span><span id="ENG-TXT">Motor servidor: verificando telemetría...</span>
       </div>
 
       <!-- CHART BLINDADO CON WRAPPER RELATIVO Y LOADER -->
       <div class="cw-wrap" id="CW-WRAP">
-        <div id="CW-LOAD">Sincronizando Mercado...</div>
+        <div id="CW-LOAD">Dibujando Interfaz Gráfica...</div>
         <div id="CW"></div>
       </div>
 
@@ -537,9 +537,9 @@ tr:hover td{background:var(--bg3)}
   </div>
 </div></div>
 
-<!-- ═══════════════════════════════════════════════════════════
+<!-- ═══════════════════════════════════════════════════════════════
      JAVASCRIPT
-═══════════════════════════════════════════════════════════ -->
+═══════════════════════════════════════════════════════════════ -->
 <script>
 'use strict';
 
@@ -591,7 +591,7 @@ function buildSwatches(cid) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  AUTH
+//  AUTH & INIT
 // ═══════════════════════════════════════════════════════════════
 let pwdHash = null;
 async function sha256(msg) {
@@ -601,6 +601,10 @@ async function sha256(msg) {
 async function initAuth() {
   safe(() => buildSwatches('LTH'));
   safe(() => { if (curTheme) document.getElementById('APP').classList.add(curTheme); });
+  
+  // EL DOM SE CONSTRUYE SIEMPRE. NUNCA SE USA DISPLAY: NONE EN EL CONTENEDOR PRINCIPAL
+  if (!chart) initDashboard();
+
   try {
     const r = await fetch('/api/config');
     const d = await r.json();
@@ -608,9 +612,6 @@ async function initAuth() {
   } catch {
     pwdHash = await sha256('trading2025');
   }
-  
-  // INICIALIZACIÓN INVISIBLE: El DOM calcula geometría sin interrupciones bajo el Login
-  if (!chart) initDashboard();
 
   if (sessionStorage.getItem('tdp-auth') === '1') {
     showApp();
@@ -906,28 +907,50 @@ function liveUpdateMacro(price) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  CHART (BLINDADO - RENDERIZADO NATIVO AUTOSIZE)
+//  CHART (BLOQUEO RECURSIVO DE DIMENSIONES)
 // ═══════════════════════════════════════════════════════════════
 function initChart() {
+  const wrap = document.getElementById('CW-WRAP');
+  const chartDiv = document.getElementById('CW');
+  
+  const w = wrap.clientWidth;
+  const h = wrap.clientHeight;
+
+  // BLOQUEO CRÍTICO: Si el DOM aún no pinta dimensiones reales, 
+  // abortamos y reintentamos en 50ms. Esto ERRADICA la pantalla negra y los bugs WebGL 0x0.
+  if (w === 0 || h === 0) {
+    setTimeout(initChart, 50);
+    return;
+  }
+
   safe(() => {
-    const chartDiv = document.getElementById('CW');
     chartDiv.innerHTML = '';
-    
     chart = LightweightCharts.createChart(chartDiv, {
-      autoSize: true, // SOLUCIÓN DEFINITIVA A LA PANTALLA NEGRA
+      width: w,
+      height: h,
       layout: { background: { type:'solid', color:'transparent' }, textColor: 'rgba(150,160,180,.8)' },
       grid: { vertLines: { color:'rgba(255,255,255,.03)' }, horzLines: { color:'rgba(255,255,255,.03)' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       rightPriceScale: { borderColor:'rgba(255,255,255,.07)', scaleMargins:{top:.05,bottom:.2} },
       timeScale: { borderColor:'rgba(255,255,255,.07)', timeVisible:true, secondsVisible:false },
     });
+    
     cSer = chart.addCandlestickSeries({
       upColor:'#26a69a', downColor:'#ef5350',
       borderUpColor:'#26a69a', borderDownColor:'#ef5350',
       wickUpColor:'#26a69a', wickDownColor:'#ef5350'
     });
+    
     vSer = chart.addHistogramSeries({ priceScaleId:'vol', scaleMargins:{top:.85,bottom:0} });
     chart.priceScale('vol').applyOptions({ scaleMargins:{top:.85,bottom:0} });
+    
+    new ResizeObserver((entries) => {
+      if (entries.length === 0 || !chart) return;
+      safe(() => {
+        const r = entries[0].contentRect;
+        if (r.width > 10 && r.height > 10) chart.applyOptions({ width: r.width, height: r.height });
+      });
+    }).observe(wrap);
   });
 }
 
@@ -1303,8 +1326,13 @@ async function pollServer() {
     const r = await fetch('/api/state');
     const d = await r.json();
     safe(() => {
-      document.getElementById('EDOT').className = d.engineRunning ? 'edot on' : 'edot';
-      document.getElementById('EMSG').textContent = `Servidor: Scan #${d.scanCount}`;
+      document.getElementById('EDOT').className = d.daemonActive ? 'edot on' : 'edot';
+      
+      let msg = `Servidor: Scan #${d.scanCount}`;
+      if (d.isScanning) msg += ' (Buscando...)';
+      else msg += ' (En espera)';
+      
+      document.getElementById('EMSG').textContent = msg;
       document.getElementById('ENG-NOTICE').className = 'eng-notice eng-ok';
       document.getElementById('ENG-TXT').textContent = '🌐 Motor 24/7 operando en el servidor. Alertas directas activas.';
       
@@ -1498,6 +1526,8 @@ function setChartData() {
     vSer.setData(cc.map(c => ({time:c.time, value:c.vol, color:c.close>=c.open?'rgba(38,166,154,.3)':'rgba(239,83,80,.3)'})));
     updatePrice(cc[cc.length-1].close);
     
+    const wrap = document.getElementById('CW-WRAP');
+    if (wrap.clientWidth > 10 && wrap.clientHeight > 10) chart.applyOptions({width: wrap.clientWidth, height: wrap.clientHeight});
     chart.timeScale().fitContent();
     renderOvr();
     
