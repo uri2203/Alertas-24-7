@@ -9,7 +9,8 @@ export const STATE = {
   signals:       {},
   prices:        {},
   lastScan:      null,
-  engineRunning: false,
+  daemonActive:  false, // Verdadero siempre que el servidor esté vivo
+  isScanning:    false, // Verdadero solo cuando hace peticiones a Binance
   scanCount:     0,
   errors:        [],
 };
@@ -46,8 +47,8 @@ async function fetchCandles(symbol, interval, limit = 500) {
 }
 
 async function runCycle(config) {
-  if (STATE.engineRunning) return;
-  STATE.engineRunning = true;
+  if (STATE.isScanning) return;
+  STATE.isScanning = true;
   STATE.scanCount++;
   STATE.lastScan = new Date().toISOString();
 
@@ -64,10 +65,10 @@ async function runCycle(config) {
         }
 
         if (!sig || sig.signal === 'WAIT') continue;
-        if (sig.score < 4) continue; // Filtro estricto de alta fiabilidad
+        if (sig.score < 4) continue;
 
         const key = `${sym}-${tf}`;
-        STATE.signals[key] = { sym, tf, ...sig }; // Inyectar metadata para la UI
+        STATE.signals[key] = { sym, tf, ...sig };
 
         const now = Date.now();
         const cooldownMs = 10 * 60 * 1000;
@@ -87,11 +88,11 @@ async function runCycle(config) {
       } catch (e) {
         console.error(`   [ERR] Scanner ${sym}/${tf}: ${e.message}`);
       }
-      await new Promise(r => setTimeout(r, 600)); // Retardo para mitigar Rate Limiting
+      await new Promise(r => setTimeout(r, 600)); // Retardo anti-bloqueo
     }
   }
 
-  STATE.engineRunning = false;
+  STATE.isScanning = false;
   console.log(`[SCAN #${STATE.scanCount}] Ciclo completado. Motor en espera.`);
 }
 
@@ -99,6 +100,8 @@ export function startScanner(config) {
   console.log('╔══════════════════════════════════════════╗');
   console.log('║  Motor Autónomo 24/7 INICIADO            ║');
   console.log('╚══════════════════════════════════════════╝');
+  
+  STATE.daemonActive = true;
   
   // Ejecución inmediata y bucle cada 3 minutos
   runCycle(config);
