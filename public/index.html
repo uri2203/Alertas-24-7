@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- INYECCIÓN ANTI-CACHE ESTRICTA -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Trading Dashboard PRO v6</title>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
@@ -591,20 +595,18 @@ function buildSwatches(cid) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  AUTH & INIT
+//  AUTH & INIT (ARQUITECTURA LAZY-MOUNT)
 // ═══════════════════════════════════════════════════════════════
 let pwdHash = null;
 async function sha256(msg) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(msg));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
 }
+
 async function initAuth() {
   safe(() => buildSwatches('LTH'));
   safe(() => { if (curTheme) document.getElementById('APP').classList.add(curTheme); });
   
-  // EL DOM SE CONSTRUYE SIEMPRE. NUNCA SE USA DISPLAY: NONE EN EL CONTENEDOR PRINCIPAL
-  if (!chart) initDashboard();
-
   try {
     const r = await fetch('/api/config');
     const d = await r.json();
@@ -619,6 +621,7 @@ async function initAuth() {
     safe(() => document.getElementById('PI').focus());
   }
 }
+
 async function doLogin() {
   const v = safe(() => document.getElementById('PI').value, '');
   if (!v) return;
@@ -632,12 +635,21 @@ async function doLogin() {
     });
   }
 }
+
 function showApp() {
   safe(() => {
     document.getElementById('LS').classList.add('H');
     buildSwatches('THS');
+    
+    // BLOQUEO ESTRICTO: El dashboard solo se inicializa DESPUÉS de que la 
+    // pantalla de login ha terminado su transición CSS (0.3s) y el DOM está expuesto al 100%.
+    if (!window.dashboardInited) {
+        window.dashboardInited = true;
+        setTimeout(() => initDashboard(), 400); 
+    }
   });
 }
+
 function doLogout() { sessionStorage.removeItem('tdp-auth'); location.reload(); }
 
 // ═══════════════════════════════════════════════════════════════
@@ -907,7 +919,7 @@ function liveUpdateMacro(price) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  CHART (BLOQUEO RECURSIVO DE DIMENSIONES)
+//  CHART (BLINDADO CON LAZY-MOUNT)
 // ═══════════════════════════════════════════════════════════════
 function initChart() {
   const wrap = document.getElementById('CW-WRAP');
@@ -916,8 +928,6 @@ function initChart() {
   const w = wrap.clientWidth;
   const h = wrap.clientHeight;
 
-  // BLOQUEO CRÍTICO: Si el DOM aún no pinta dimensiones reales, 
-  // abortamos y reintentamos en 50ms. Esto ERRADICA la pantalla negra y los bugs WebGL 0x0.
   if (w === 0 || h === 0) {
     setTimeout(initChart, 50);
     return;
