@@ -10,7 +10,8 @@ export function stateRouter() {
   router.get('/', (req, res) => {
     res.json({
       mode:          'server-autonomous',
-      engineRunning: STATE.engineRunning,
+      daemonActive:  STATE.daemonActive,
+      isScanning:    STATE.isScanning,
       message:       'Escáner backend activo 24/7 transmitiendo a Telegram.',
       lastScan:      STATE.lastScan,
       scanCount:     STATE.scanCount,
