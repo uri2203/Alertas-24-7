@@ -5,8 +5,9 @@
 //    8am–12pm  → score ≥ 3, cooldown 15 min
 //    2pm–6pm   → score ≥ 3, cooldown 15 min
 //    8pm–12am  → score = 4, cooldown 20 min (solo las mejores)
-//    12am–8am  → PAUSADO
-//    12pm–2pm  → PAUSADO
+//    12am–8am  → PAUSADO automático
+//    12pm–2pm  → PAUSADO automático
+//  STATE.paused = true → pausado manualmente desde el dashboard
 // ═══════════════════════════════════════════════════════════════
 import { scoreSignal, TF_CONFIG } from './signals.js';
 import { sendTelegram, buildAlertMessage } from './telegram.js';
@@ -17,6 +18,7 @@ export const STATE = {
   lastScan:     null,
   daemonActive: false,
   isScanning:   false,
+  paused:       false, // pausa manual desde el dashboard
   scanCount:    0,
   errors:       [],
   session:      null,
@@ -33,7 +35,7 @@ function getSession() {
   if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 3, cooldownMs: 15 * 60 * 1000 };
   if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 3, cooldownMs: 15 * 60 * 1000 };
   if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 4, cooldownMs: 20 * 60 * 1000 };
-  return null; // Fuera de horario → pausado
+  return null;
 }
 
 // ── FETCH CANDLES ────────────────────────────────────────────────
@@ -69,8 +71,16 @@ async function fetchCandles(symbol, interval, limit = 500) {
 async function runCycle(config) {
   if (STATE.isScanning) return;
 
-  const session    = getSession();
-  STATE.session    = session ? session.name : 'Pausado';
+  // Pausa manual desde el dashboard
+  if (STATE.paused) {
+    STATE.session = 'Pausado';
+    console.log(`[SCANNER] ⏸ Pausado manualmente — sin envíos.`);
+    return;
+  }
+
+  // Pausa automática por horario
+  const session = getSession();
+  STATE.session = session ? session.name : 'Fuera de horario';
 
   if (!session) {
     console.log(`[SCANNER] Fuera de horario — pausado hasta próxima sesión.`);
@@ -79,7 +89,7 @@ async function runCycle(config) {
 
   STATE.isScanning = true;
   STATE.scanCount++;
-  STATE.lastScan   = new Date().toISOString();
+  STATE.lastScan = new Date().toISOString();
 
   console.log(`\n[SCAN #${STATE.scanCount}] Sesión: ${session.name} | Score≥${session.minScore} | Cooldown: ${session.cooldownMs / 60000}min`);
 
