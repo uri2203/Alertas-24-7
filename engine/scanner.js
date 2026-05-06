@@ -1,16 +1,17 @@
 // ═══════════════════════════════════════════════════════════════
 //  engine/scanner.js
 //  Motor de Escaneo Autónomo (Servidor 24/7)
-//  Horario México (America/Mexico_City):
-//    8am–12pm  → score ≥ 3, cooldown 15 min
-//    2pm–6pm   → score ≥ 3, cooldown 15 min
-//    8pm–12am  → score = 4, cooldown 20 min (solo las mejores)
-//    12am–8am  → PAUSADO automático
-//    12pm–2pm  → PAUSADO automático
-//  STATE.paused = true → pausado manualmente desde el dashboard
+//
+//  Filtros por sesión (hora México):
+//    8am–12pm  → score ≥ 5/6, cooldown 15 min
+//    2pm–6pm   → score ≥ 5/6, cooldown 15 min
+//    8pm–12am  → score = 6/6, cooldown 20 min
+//    resto     → PAUSADO automático
+//
+//  Por cada par/TF consulta también el TF mayor para confirmación.
 // ═══════════════════════════════════════════════════════════════
-import { scoreSignal, TF_CONFIG } from './signals.js';
-import { sendTelegram, buildAlertMessage } from './telegram.js';
+import { scoreSignal, TF_CONFIG, TF_PARENT } from './signals.js';
+import { sendTelegram, buildAlertMessage }    from './telegram.js';
 
 export const STATE = {
   signals:      {},
@@ -18,23 +19,25 @@ export const STATE = {
   lastScan:     null,
   daemonActive: false,
   isScanning:   false,
-  paused:       false, // pausa manual desde el dashboard
+  paused:       false,
   scanCount:    0,
   errors:       [],
   session:      null,
 };
 
-const alertCooldown = {};
+const alertCooldown  = {};
+const mayorCache     = {};   // cache de candles del TF mayor (se refresca cada ciclo)
+const MAYOR_CACHE_MS = 3 * 60 * 1000; // válido 3 minutos (1 ciclo)
 
-// ── SESIÓN ACTIVA según hora México ──────────────────────────────
+// ── SESIÓN ACTIVA ────────────────────────────────────────────────
 function getSession() {
   const mxStr  = new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' });
   const mxDate = new Date(mxStr);
   const h      = mxDate.getHours() + mxDate.getMinutes() / 60;
 
-  if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 3, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 3, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 4, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 5, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 5, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 6, cooldownMs: 20 * 60 * 1000 };
   return null;
 }
 
@@ -44,44 +47,61 @@ async function fetchCandles(symbol, interval, limit = 500) {
     'https://data-api.binance.vision/api/v3/klines',
     'https://api1.binance.com/api/v3/klines',
     'https://api2.binance.com/api/v3/klines',
-    'https://api3.binance.com/api/v3/klines'
+    'https://api3.binance.com/api/v3/klines',
   ];
-
   let lastError;
   for (const base of endpoints) {
     try {
       const url = `${base}?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-      const res = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Server Daemon)' }
-      });
+      const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Server Daemon)' } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       return data.map(k => ({
         time: +k[0] / 1000,
         open: +k[1], high: +k[2], low: +k[3], close: +k[4], vol: +k[5],
       }));
-    } catch (e) {
-      lastError = e;
-    }
+    } catch (e) { lastError = e; }
   }
   throw lastError;
+}
+
+// ── OBTENER CANDLES DEL TF MAYOR (con caché por ciclo) ───────────
+async function getMayorCandles(symbol, tf) {
+  const parentTf = TF_PARENT[tf];
+  if (!parentTf) return null; // 1d no tiene padre
+
+  const cacheKey = `${symbol}-${parentTf}`;
+  const cached   = mayorCache[cacheKey];
+
+  // Reusar si se obtuvo en este mismo ciclo (menos de 3 min)
+  if (cached && Date.now() - cached.ts < MAYOR_CACHE_MS) {
+    return cached.candles;
+  }
+
+  try {
+    const candles = await fetchCandles(symbol, parentTf, 200);
+    mayorCache[cacheKey] = { candles, ts: Date.now() };
+    return candles;
+  } catch (e) {
+    console.error(`   [ERR] TF Mayor ${symbol}/${parentTf}: ${e.message}`);
+    return null;
+  }
 }
 
 // ── CICLO DE ESCANEO ─────────────────────────────────────────────
 async function runCycle(config) {
   if (STATE.isScanning) return;
 
-  // Pausa manual desde el dashboard
+  // Pausa manual
   if (STATE.paused) {
     STATE.session = 'Pausado';
     console.log(`[SCANNER] ⏸ Pausado manualmente — sin envíos.`);
     return;
   }
 
-  // Pausa automática por horario
+  // Pausa por horario
   const session = getSession();
   STATE.session = session ? session.name : 'Fuera de horario';
-
   if (!session) {
     console.log(`[SCANNER] Fuera de horario — pausado hasta próxima sesión.`);
     return;
@@ -91,7 +111,7 @@ async function runCycle(config) {
   STATE.scanCount++;
   STATE.lastScan = new Date().toISOString();
 
-  console.log(`\n[SCAN #${STATE.scanCount}] Sesión: ${session.name} | Score≥${session.minScore} | Cooldown: ${session.cooldownMs / 60000}min`);
+  console.log(`\n[SCAN #${STATE.scanCount}] Sesión: ${session.name} | Score≥${session.minScore}/6 | Cooldown: ${session.cooldownMs / 60000}min`);
 
   const activeThisCycle = new Set();
 
@@ -99,11 +119,16 @@ async function runCycle(config) {
     for (const tf of config.tfs) {
       const key = `${sym}-${tf}`;
       try {
+        // Candles del TF actual
         const candles = await fetchCandles(sym, tf);
-        const sig     = scoreSignal(candles, tf, TF_CONFIG);
-
         if (candles && candles.length)
           STATE.prices[sym] = candles[candles.length - 1].close;
+
+        // Candles del TF mayor (con caché)
+        const mayorCandles = await getMayorCandles(sym, tf);
+
+        // Score con las 6 condiciones
+        const sig = scoreSignal(candles, tf, TF_CONFIG, mayorCandles);
 
         if (!sig || sig.signal === 'WAIT' || sig.score < session.minScore) continue;
 
@@ -117,7 +142,7 @@ async function runCycle(config) {
           if (config.telegram.token && config.telegram.chatId) {
             const result = await sendTelegram(config.telegram.token, config.telegram.chatId, text);
             if (result.ok)
-              console.log(`   ✅ [ALERTA ENVIADA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/4)`);
+              console.log(`   ✅ [ALERTA ENVIADA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/6)`);
             else
               console.log(`   ❌ [ERR TELEGRAM] ${JSON.stringify(result)}`);
           }
@@ -145,6 +170,7 @@ async function runCycle(config) {
 export function startScanner(config) {
   console.log('╔══════════════════════════════════════════╗');
   console.log('║  Motor Autónomo 24/7 INICIADO            ║');
+  console.log('║  Filtros: RSI + Volumen + TF Mayor       ║');
   console.log('║  Horario México activado                 ║');
   console.log('╚══════════════════════════════════════════╝');
 

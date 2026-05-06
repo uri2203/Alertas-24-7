@@ -12,6 +12,7 @@ const fp = v => {
 export function buildAlertMessage(sym, tf, sig) {
   const emoji = sig.signal === 'LONG' ? '🟢' : '🔴';
   const time  = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+  const r     = sig.rules || {};
 
   return `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>
 
@@ -27,17 +28,19 @@ ${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}
   • VPOC:     <code>${fp(sig.vpoc)}</code>
 
 📋 <b>Condiciones activas:</b>
-  ${sig.rules?.fldDir   ? '✅' : '❌'} Hurst FLD (${sig.rules?.fldDir || '—'})
-  ${sig.rules?.inFib    ? '✅' : '❌'} Zona Fibonacci 38.2–61.8%
-  ${sig.rules?.pvOk     ? '✅' : '❌'} Confluencia Pivote
-  ${sig.rules?.nearVPOC ? '✅' : '❌'} Proximidad VPOC
+  ${r.fldDir      ? '✅' : '❌'} Hurst FLD (${r.fldDir || '—'})
+  ${r.inFib       ? '✅' : '❌'} Zona Fibonacci 38.2–61.8%
+  ${r.pvOk        ? '✅' : '❌'} Confluencia Pivote
+  ${r.w1ok        ? '✅' : '❌'} Onda de Elliott detectada
+  ${r.rsiVolumeOk ? '✅' : '❌'} RSI alineado + Volumen confirmado
+  ${r.tfMayorOk   ? '✅' : '❌'} Timeframe mayor alineado
 
 ⚠️ <i>Sistema automático. Valida siempre con tu análisis personal.</i>`;
 }
 
 export async function sendTelegram(token, chatId, text) {
   try {
-    const res  = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
