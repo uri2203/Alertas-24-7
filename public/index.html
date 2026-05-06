@@ -1063,17 +1063,25 @@ function renderElliottWaves(cc, tf) {
       });
 
       if (lineData.length >= 2) {
-        const lineSer = chart.addLineSeries({
-          color: pat.ewCol,
-          lineWidth: cfg.ewWidth,
-          lineStyle: pat.pts.length < 5 ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid,
-          title: `EW ${cfg.deg}`,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        });
-        lineSer.setData(lineData);
-        xSer.push(lineSer);
-        ewLines.push(lineSer);
+        // Deduplicar y ordenar timestamps — LightweightCharts los exige únicos y ascendentes
+        const seen = new Set();
+        const cleanLine = lineData
+          .sort((a, b) => a.time - b.time)
+          .filter(p => { if (seen.has(p.time)) return false; seen.add(p.time); return true; });
+
+        if (cleanLine.length >= 2) {
+          const lineSer = chart.addLineSeries({
+            color: pat.ewCol,
+            lineWidth: cfg.ewWidth,
+            lineStyle: pat.pts.length < 5 ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid,
+            title: `EW ${cfg.deg}`,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          lineSer.setData(cleanLine);
+          xSer.push(lineSer);
+          ewLines.push(lineSer);
+        }
       }
 
       // ── Proyección W5 si tenemos W1-W4 completas ────────────
@@ -1125,7 +1133,21 @@ function renderElliottWaves(cc, tf) {
       if (markers.length) ewMarkersBuf.push(...markers);
     });
 
-    if (cSer && ewMarkersBuf.length) cSer.setMarkers(ewMarkersBuf.slice().sort((a,b) => a.time - b.time));
+    if (cSer && ewMarkersBuf.length) {
+      // LightweightCharts exige markers con tiempo único y ascendente
+      // Si hay duplicados en el mismo tiempo, concatenar los textos
+      const mMap = new Map();
+      ewMarkersBuf
+        .sort((a, b) => a.time - b.time)
+        .forEach(m => {
+          if (mMap.has(m.time)) {
+            mMap.get(m.time).text += ' · ' + m.text;
+          } else {
+            mMap.set(m.time, { ...m });
+          }
+        });
+      cSer.setMarkers([...mMap.values()]);
+    }
   });
 }
 
