@@ -420,7 +420,10 @@ tr:hover td{background:var(--bg3)}
     <div class="scan-panel">
       <div class="scan-hdr">
         <span>🔍 Scanner Backend</span>
-        <span class="scan-ref" onclick="refreshScanner()">↺ act.</span>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button id="BTN-PAUSE" onclick="togglePause()" style="font-size:9px;padding:2px 8px;border-radius:4px;border:1px solid var(--grn);background:transparent;color:var(--grn);cursor:pointer;font-family:inherit;">⏸ Pausar</button>
+          <span class="scan-ref" onclick="refreshScanner()">↺ act.</span>
+        </div>
       </div>
       <div id="SCLIST"><div class="scan-load">Conectando al servidor...</div></div>
       <div class="scan-ts" id="SCTS"></div>
@@ -1343,8 +1346,16 @@ async function pollServer() {
       else msg += ' (En espera)';
       
       document.getElementById('EMSG').textContent = msg;
-      document.getElementById('ENG-NOTICE').className = 'eng-notice eng-ok';
-      document.getElementById('ENG-TXT').textContent = '🌐 Motor 24/7 operando en el servidor. Alertas directas activas.';
+      document.getElementById('ENG-NOTICE').className = d.paused ? 'eng-notice eng-warn' : 'eng-notice eng-ok';
+      document.getElementById('ENG-TXT').textContent = d.paused
+        ? '⏸ Alertas PAUSADAS manualmente. Presiona Activar para reanudar.'
+        : `🌐 Motor 24/7 operando. Sesión: ${d.session || 'verificando...'}`;
+      const btn = document.getElementById('BTN-PAUSE');
+      if (btn) {
+        btn.textContent  = d.paused ? '▶ Activar' : '⏸ Pausar';
+        btn.style.borderColor = d.paused ? 'var(--red)' : 'var(--grn)';
+        btn.style.color       = d.paused ? 'var(--red)' : 'var(--grn)';
+      }
       
       if (d.signals && Object.keys(d.signals).length > 0) {
          renderScanResults(Object.values(d.signals));
@@ -1648,6 +1659,19 @@ function initDashboard() {
     initChart(); buildTFR(MC[curMode]); buildLayR(MC[curMode]);
     updateSess(); fullReload();
     pollServer(); setInterval(() => safe(pollServer), 30000);
+  });
+}
+async function togglePause() {
+  await safeAsync(async () => {
+    const r = await fetch('/api/state');
+    const d = await r.json();
+    const newPaused = !d.paused;
+    await fetch('/api/state/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paused: newPaused })
+    });
+    await pollServer();
   });
 }
 window.addEventListener('load', initAuth);
