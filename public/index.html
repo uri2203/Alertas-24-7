@@ -378,6 +378,7 @@ tr:hover td{background:var(--bg3)}
       </div>
 
       <!-- SERVER ENGINE NOTICE -->
+      <div id="EW-DIAG" style="display:none;font-size:9px;color:#fbbf24;padding:2px 8px;background:#1a1a2e;border-radius:4px;margin-bottom:4px;font-family:monospace;"></div>
       <div class="eng-notice eng-warn" id="ENG-NOTICE">
         <span>🖥️</span><span id="ENG-TXT">Motor servidor: verificando telemetría...</span>
       </div>
@@ -1040,6 +1041,16 @@ function renderElliottWaves(cc, tf) {
   safe(() => {
     if (!SH.ew || !cc || !cc.length) return;
     const pats = detectEW(cc, tf);
+
+    // ── DIAGNÓSTICO VISIBLE EN PANTALLA ─────────────────────────
+    const lb0  = Math.max(2, Math.floor(cc.length / 50));
+    const sw0  = swings(cc, lb0);
+    const diagEl = document.getElementById('EW-DIAG');
+    if (diagEl) {
+      diagEl.textContent = `EW Debug | Candles:${cc.length} Swings:${sw0.length} LB:${lb0} Patrones:${pats ? pats.length : 0}`;
+      diagEl.style.display = 'block';
+    }
+
     if (!pats || !pats.length) return;
 
     const cfg = TFC[tf] || TFC['1h'];
@@ -1063,25 +1074,17 @@ function renderElliottWaves(cc, tf) {
       });
 
       if (lineData.length >= 2) {
-        // Deduplicar y ordenar timestamps — LightweightCharts los exige únicos y ascendentes
-        const seen = new Set();
-        const cleanLine = lineData
-          .sort((a, b) => a.time - b.time)
-          .filter(p => { if (seen.has(p.time)) return false; seen.add(p.time); return true; });
-
-        if (cleanLine.length >= 2) {
-          const lineSer = chart.addLineSeries({
-            color: pat.ewCol,
-            lineWidth: cfg.ewWidth,
-            lineStyle: pat.pts.length < 5 ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid,
-            title: `EW ${cfg.deg}`,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-          lineSer.setData(cleanLine);
-          xSer.push(lineSer);
-          ewLines.push(lineSer);
-        }
+        const lineSer = chart.addLineSeries({
+          color: pat.ewCol,
+          lineWidth: cfg.ewWidth,
+          lineStyle: pat.pts.length < 5 ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid,
+          title: `EW ${cfg.deg}`,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        lineSer.setData(lineData);
+        xSer.push(lineSer);
+        ewLines.push(lineSer);
       }
 
       // ── Proyección W5 si tenemos W1-W4 completas ────────────
@@ -1133,21 +1136,7 @@ function renderElliottWaves(cc, tf) {
       if (markers.length) ewMarkersBuf.push(...markers);
     });
 
-    if (cSer && ewMarkersBuf.length) {
-      // LightweightCharts exige markers con tiempo único y ascendente
-      // Si hay duplicados en el mismo tiempo, concatenar los textos
-      const mMap = new Map();
-      ewMarkersBuf
-        .sort((a, b) => a.time - b.time)
-        .forEach(m => {
-          if (mMap.has(m.time)) {
-            mMap.get(m.time).text += ' · ' + m.text;
-          } else {
-            mMap.set(m.time, { ...m });
-          }
-        });
-      cSer.setMarkers([...mMap.values()]);
-    }
+    if (cSer && ewMarkersBuf.length) cSer.setMarkers(ewMarkersBuf.slice().sort((a,b) => a.time - b.time));
   });
 }
 
