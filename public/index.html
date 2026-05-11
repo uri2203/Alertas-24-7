@@ -378,7 +378,6 @@ tr:hover td{background:var(--bg3)}
       </div>
 
       <!-- SERVER ENGINE NOTICE -->
-      <div id="EW-DIAG" style="display:none;font-size:9px;color:#fbbf24;padding:2px 8px;background:#1a1a2e;border-radius:4px;margin-bottom:4px;font-family:monospace;"></div>
       <div class="eng-notice eng-warn" id="ENG-NOTICE">
         <span>🖥️</span><span id="ENG-TXT">Motor servidor: verificando telemetría...</span>
       </div>
@@ -818,9 +817,9 @@ function detectEW(cc, tf) {
         // ── PATRÓN ALCISTA ────────────────────────────────────────
         if (up && w.length >= 5) {
           const w1  = w[1].p - w[0].p; if (w1 <= 0) continue;
-          const w2r = (w[1].p - w[2].p) / w1; if (w2r < .3 || w2r > .82) continue;
-          const w3  = w[3].p - w[2].p; if (w3 < w1 * .88) continue;
-          const w4r = (w[3].p - w[4].p) / w3; if (w4r < .18 || w4r > .65) continue;
+          const w2r = (w[1].p - w[2].p) / w1; if (w2r < .25 || w2r > .85) continue;
+          const w3  = w[3].p - w[2].p; if (w3 < w1 * .70) continue;
+          const w4r = (w[3].p - w[4].p) / w3; if (w4r < .15 || w4r > .70) continue;
           if (w[4].p <= w[1].p) continue;
 
           // Calcular onda actual (en qué onda está el precio ahora)
@@ -848,9 +847,9 @@ function detectEW(cc, tf) {
         // ── PATRÓN BAJISTA ────────────────────────────────────────
         if (!up && w.length >= 5) {
           const w1  = w[0].p - w[1].p; if (w1 <= 0) continue;
-          const w2r = (w[2].p - w[1].p) / w1; if (w2r < .3 || w2r > .82) continue;
-          const w3  = w[2].p - w[3].p; if (w3 < w1 * .88) continue;
-          const w4r = (w[4].p - w[3].p) / w3; if (w4r < .18 || w4r > .65) continue;
+          const w2r = (w[2].p - w[1].p) / w1; if (w2r < .25 || w2r > .85) continue;
+          const w3  = w[2].p - w[3].p; if (w3 < w1 * .70) continue;
+          const w4r = (w[4].p - w[3].p) / w3; if (w4r < .15 || w4r > .70) continue;
           if (w[4].p >= w[1].p) continue;
 
           const pts     = w.slice(0, 5);
@@ -1041,16 +1040,6 @@ function renderElliottWaves(cc, tf) {
   safe(() => {
     if (!SH.ew || !cc || !cc.length) return;
     const pats = detectEW(cc, tf);
-
-    // ── DIAGNÓSTICO VISIBLE EN PANTALLA ─────────────────────────
-    const lb0  = Math.max(2, Math.floor(cc.length / 50));
-    const sw0  = swings(cc, lb0);
-    const diagEl = document.getElementById('EW-DIAG');
-    if (diagEl) {
-      diagEl.textContent = `EW Debug | Candles:${cc.length} Swings:${sw0.length} LB:${lb0} Patrones:${pats ? pats.length : 0}`;
-      diagEl.style.display = 'block';
-    }
-
     if (!pats || !pats.length) return;
 
     const cfg = TFC[tf] || TFC['1h'];
