@@ -1,7 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  server.js  —  Trading Dashboard PRO v6  (Scanner Autónomo)
-//  El servidor sirve archivos estáticos, proxyea Telegram
-//  y corre el scanner 24/7 en background.
+//  server.js  —  Trading Dashboard PRO v7
 // ═══════════════════════════════════════════════════════════════
 import express           from 'express';
 import cors              from 'cors';
@@ -13,11 +11,11 @@ dotenv.config();
 import { configRouter }  from './routes/config.js';
 import { stateRouter }   from './routes/state.js';
 import { alertsRouter }  from './routes/alerts.js';
+import { trackerRouter } from './routes/tracker.js';
 import { startScanner }  from './engine/scanner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ── APP CONFIG ────────────────────────────────────────────────
 const CONFIG = {
   port:     process.env.PORT     || 3000,
   password: process.env.DASHBOARD_PASSWORD || 'trading2025',
@@ -29,31 +27,26 @@ const CONFIG = {
   },
 };
 
-// ── EXPRESS SETUP ─────────────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── ROUTES ────────────────────────────────────────────────────
-app.get('/ping',         (_, res) => res.json({ ok: true, time: new Date().toISOString(), mode: 'scanner-activo' }));
+app.get('/ping',         (_, res) => res.json({ ok: true, time: new Date().toISOString() }));
 app.use('/api/config',   configRouter(CONFIG));
 app.use('/api/state',    stateRouter());
 app.use('/api/telegram', alertsRouter(CONFIG));
+app.use('/api/tracker',  trackerRouter());
 
-// Catch-all → serve frontend
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-// ── START ─────────────────────────────────────────────────────
 app.listen(CONFIG.port, '0.0.0.0', () => {
   console.log(`
 ╔══════════════════════════════════════════╗
-║  Trading Dashboard PRO v6                ║
+║  Trading Dashboard PRO v7                ║
 ║  Modo   : Scanner Autónomo 24/7 ACTIVO   ║
 ║  Puerto : ${CONFIG.port}                          ║
 ╚══════════════════════════════════════════╝
   `);
-
-  // Arranca el scanner después de que el servidor esté listo
   startScanner(CONFIG);
 });
