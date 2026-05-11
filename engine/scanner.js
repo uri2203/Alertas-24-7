@@ -1,14 +1,16 @@
 // ═══════════════════════════════════════════════════════════════
-//  engine/scanner.js
-//  Motor de Escaneo Autónomo (Servidor 24/7)
+//  engine/scanner.js  —  Trading Dashboard PRO v7
+//  Motor de Escaneo Autónomo 24/7
 //
-//  Filtros por sesión (hora México):
-//    8am–12pm  → score ≥ 5/6, cooldown 15 min
-//    2pm–6pm   → score ≥ 5/6, cooldown 15 min
-//    8pm–12am  → score = 6/6, cooldown 20 min
+//  Horario México (America/Mexico_City):
+//    8am–12pm  → score ≥ 6/8, cooldown 15 min
+//    2pm–6pm   → score ≥ 6/8, cooldown 15 min
+//    8pm–12am  → score ≥ 7/8, cooldown 20 min
 //    resto     → PAUSADO automático
 //
-//  Por cada par/TF consulta también el TF mayor para confirmación.
+//  Filtro anti-contradicción:
+//    Si en los últimos 15 min se envió LONG de BTC (cualquier TF),
+//    se bloquea cualquier SHORT de BTC hasta que pase ese tiempo.
 // ═══════════════════════════════════════════════════════════════
 import { scoreSignal, TF_CONFIG, TF_PARENT } from './signals.js';
 import { sendTelegram, buildAlertMessage }    from './telegram.js';
@@ -25,9 +27,11 @@ export const STATE = {
   session:      null,
 };
 
-const alertCooldown  = {};
-const mayorCache     = {};   // cache de candles del TF mayor (se refresca cada ciclo)
-const MAYOR_CACHE_MS = 3 * 60 * 1000; // válido 3 minutos (1 ciclo)
+const alertCooldown  = {};   // cooldown por par+TF
+const lastDirSent    = {};   // { 'BTCUSDT': { dir: 'up', time: Date.now() } }
+const mayorCache     = {};
+const MAYOR_CACHE_MS = 3 * 60 * 1000;
+const ANTI_CONTRA_MS = 15 * 60 * 1000; // ventana anti-contradicción
 
 // ── SESIÓN ACTIVA ────────────────────────────────────────────────
 function getSession() {
@@ -35,10 +39,25 @@ function getSession() {
   const mxDate = new Date(mxStr);
   const h      = mxDate.getHours() + mxDate.getMinutes() / 60;
 
-  if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 5, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 5, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 6, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 6, minScoreDiv: 5, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 6, minScoreDiv: 5, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 7, minScoreDiv: 5, cooldownMs: 20 * 60 * 1000 };
   return null;
+}
+
+// ── FILTRO ANTI-CONTRADICCIÓN ────────────────────────────────────
+// Retorna true si la señal está bloqueada por una señal contraria reciente
+function isContradicted(sym, dir) {
+  const last = lastDirSent[sym];
+  if (!last) return false;
+  const isOpposite = last.dir !== dir;
+  const isRecent   = Date.now() - last.time < ANTI_CONTRA_MS;
+  return isOpposite && isRecent;
+}
+
+// Registra la dirección enviada para un símbolo
+function registerSent(sym, dir) {
+  lastDirSent[sym] = { dir, time: Date.now() };
 }
 
 // ── FETCH CANDLES ────────────────────────────────────────────────
@@ -65,19 +84,13 @@ async function fetchCandles(symbol, interval, limit = 500) {
   throw lastError;
 }
 
-// ── OBTENER CANDLES DEL TF MAYOR (con caché por ciclo) ───────────
+// ── CANDLES TF MAYOR con caché ────────────────────────────────────
 async function getMayorCandles(symbol, tf) {
   const parentTf = TF_PARENT[tf];
-  if (!parentTf) return null; // 1d no tiene padre
-
+  if (!parentTf) return null;
   const cacheKey = `${symbol}-${parentTf}`;
   const cached   = mayorCache[cacheKey];
-
-  // Reusar si se obtuvo en este mismo ciclo (menos de 3 min)
-  if (cached && Date.now() - cached.ts < MAYOR_CACHE_MS) {
-    return cached.candles;
-  }
-
+  if (cached && Date.now() - cached.ts < MAYOR_CACHE_MS) return cached.candles;
   try {
     const candles = await fetchCandles(symbol, parentTf, 200);
     mayorCache[cacheKey] = { candles, ts: Date.now() };
@@ -92,14 +105,12 @@ async function getMayorCandles(symbol, tf) {
 async function runCycle(config) {
   if (STATE.isScanning) return;
 
-  // Pausa manual
   if (STATE.paused) {
     STATE.session = 'Pausado';
     console.log(`[SCANNER] ⏸ Pausado manualmente — sin envíos.`);
     return;
   }
 
-  // Pausa por horario
   const session = getSession();
   STATE.session = session ? session.name : 'Fuera de horario';
   if (!session) {
@@ -111,7 +122,7 @@ async function runCycle(config) {
   STATE.scanCount++;
   STATE.lastScan = new Date().toISOString();
 
-  console.log(`\n[SCAN #${STATE.scanCount}] Sesión: ${session.name} | Score≥${session.minScore}/6 | Cooldown: ${session.cooldownMs / 60000}min`);
+  console.log(`\n[SCAN #${STATE.scanCount}] Sesión: ${session.name} | Score≥${session.minScore}/8 | Cooldown: ${session.cooldownMs / 60000}min`);
 
   const activeThisCycle = new Set();
 
@@ -119,30 +130,50 @@ async function runCycle(config) {
     for (const tf of config.tfs) {
       const key = `${sym}-${tf}`;
       try {
-        // Candles del TF actual
-        const candles = await fetchCandles(sym, tf);
+        const candles      = await fetchCandles(sym, tf);
+        const mayorCandles = await getMayorCandles(sym, tf);
+
         if (candles && candles.length)
           STATE.prices[sym] = candles[candles.length - 1].close;
 
-        // Candles del TF mayor (con caché)
-        const mayorCandles = await getMayorCandles(sym, tf);
-
-        // Score con las 6 condiciones
         const sig = scoreSignal(candles, tf, TF_CONFIG, mayorCandles);
+        if (!sig || sig.signal === 'WAIT') continue;
 
-        if (!sig || sig.signal === 'WAIT' || sig.score < session.minScore) continue;
+        // ── Verificar si pasa los filtros de score ───────────────
+        const divAligned = sig.divergence &&
+          ((sig.dir === 'up' && sig.divergence === 'bullish') ||
+           (sig.dir === 'dn' && sig.divergence === 'bearish'));
+
+        const passNormal = sig.score >= session.minScore;
+        const passDiv    = divAligned && sig.score >= session.minScoreDiv;
+
+        if (!passNormal && !passDiv) continue;
+
+        // ── FILTRO ANTI-CONTRADICCIÓN ────────────────────────────
+        if (isContradicted(sym, sig.dir)) {
+          const last     = lastDirSent[sym];
+          const restMin  = Math.ceil((ANTI_CONTRA_MS - (Date.now() - last.time)) / 60000);
+          const dirLabel = sig.signal === 'LONG' ? 'LONG' : 'SHORT';
+          console.log(`   🚫 [ANTI-CONTRA] ${sym} ${tf} — ${dirLabel} bloqueado (señal contraria hace ${15 - restMin} min, espera ${restMin} min más)`);
+          continue;
+        }
 
         activeThisCycle.add(key);
-        STATE.signals[key] = { sym, tf, ...sig };
+        STATE.signals[key] = { sym, tf, ...sig, isDivergence: passDiv && !passNormal };
 
         const now = Date.now();
         if (!alertCooldown[key] || now - alertCooldown[key] > session.cooldownMs) {
           alertCooldown[key] = now;
-          const text = buildAlertMessage(sym, tf, sig);
+
+          // Registrar dirección enviada para este símbolo (anti-contradicción)
+          registerSent(sym, sig.dir);
+
+          const text = buildAlertMessage(sym, tf, sig, passDiv && !passNormal);
           if (config.telegram.token && config.telegram.chatId) {
             const result = await sendTelegram(config.telegram.token, config.telegram.chatId, text);
+            const tag    = passDiv && !passNormal ? '📐 DIV' : '✅';
             if (result.ok)
-              console.log(`   ✅ [ALERTA ENVIADA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/6)`);
+              console.log(`   ${tag} [ALERTA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/8)`);
             else
               console.log(`   ❌ [ERR TELEGRAM] ${JSON.stringify(result)}`);
           }
@@ -169,13 +200,11 @@ async function runCycle(config) {
 // ── INICIO ───────────────────────────────────────────────────────
 export function startScanner(config) {
   console.log('╔══════════════════════════════════════════╗');
-  console.log('║  Motor Autónomo 24/7 INICIADO            ║');
-  console.log('║  Filtros: RSI + Volumen + TF Mayor       ║');
+  console.log('║  Motor Autónomo 24/7 INICIADO  v7        ║');
+  console.log('║  MACD + ADX + Div RSI + Anti-Contra      ║');
   console.log('║  Horario México activado                 ║');
   console.log('╚══════════════════════════════════════════╝');
-
   STATE.daemonActive = true;
-
   runCycle(config);
   setInterval(() => runCycle(config), 3 * 60 * 1000);
 }
