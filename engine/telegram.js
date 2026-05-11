@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  engine/telegram.js
+//  engine/telegram.js  —  Trading Dashboard PRO v7
 // ═══════════════════════════════════════════════════════════════
 
 const fp = v => {
@@ -9,16 +9,25 @@ const fp = v => {
     : v.toFixed(4);
 };
 
-export function buildAlertMessage(sym, tf, sig) {
+export function buildAlertMessage(sym, tf, sig, isDivergence = false) {
   const emoji = sig.signal === 'LONG' ? '🟢' : '🔴';
   const time  = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
   const r     = sig.rules || {};
 
-  return `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>
+  // Encabezado especial si es señal de divergencia
+  const header = isDivergence
+    ? `📐 <b>DIVERGENCIA RSI — ${sig.signal} ${sym} ${tf.toUpperCase()}</b>`
+    : `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>`;
+
+  const divLine = sig.divergence
+    ? `\n📐 <b>Divergencia:</b> ${sig.divergence === 'bullish' ? '🟢 Alcista (precio nuevo mín, RSI no)' : '🔴 Bajista (precio nuevo máx, RSI no)'}`
+    : '';
+
+  return `${header}
 
 🕐 <b>Hora MX:</b> ${time}
 📊 <b>Confluencia:</b> ${sig.score}/${sig.max} condiciones
-${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}
+${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${divLine}
 
 💰 <b>Niveles de operación:</b>
   • Entrada:  <code>${fp(sig.entry)}</code>
@@ -34,6 +43,8 @@ ${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}
   ${r.w1ok        ? '✅' : '❌'} Onda de Elliott detectada
   ${r.rsiVolumeOk ? '✅' : '❌'} RSI alineado + Volumen confirmado
   ${r.tfMayorOk   ? '✅' : '❌'} Timeframe mayor alineado
+  ${r.macdOk      ? '✅' : '❌'} MACD confirmando dirección
+  ${r.adxOk       ? '✅' : '❌'} ADX > 25 (tendencia real, no lateral)
 
 ⚠️ <i>Sistema automático. Valida siempre con tu análisis personal.</i>`;
 }
