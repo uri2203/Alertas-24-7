@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading Dashboard — Estadísticas</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #e2e8f0; font-family: 'Courier New', monospace; min-height: 100vh; padding: 20px; }
+  h1 { color: #26a69a; font-size: 18px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 4px; }
+  .sub { color: #64748b; font-size: 11px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: #12121a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; }
+  .card-title { font-size: 9px; text-transform: uppercase; letter-spacing: .08em; color: #64748b; margin-bottom: 8px; }
+  .card-val { font-size: 28px; font-weight: bold; }
+  .card-sub { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+  .win  { color: #26a69a; }
+  .loss { color: #ef5350; }
+  .neu  { color: #94a3b8; }
+  .section { margin-bottom: 24px; }
+  .section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #64748b; margin-bottom: 12px; border-bottom: 1px solid #1e293b; padding-bottom: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th { text-align: left; padding: 6px 10px; color: #64748b; font-weight: normal; border-bottom: 1px solid #1e293b; }
+  td { padding: 6px 10px; border-bottom: 1px solid #0f172a; }
+  tr:hover td { background: #12121a; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: bold; }
+  .badge-win  { background: #064e3b; color: #34d399; }
+  .badge-loss { background: #450a0a; color: #f87171; }
+  .badge-pend { background: #1e293b; color: #94a3b8; }
+  .badge-long  { background: #064e3b; color: #34d399; }
+  .badge-short { background: #450a0a; color: #f87171; }
+  .bar-wrap { background: #1e293b; border-radius: 4px; height: 6px; width: 100%; margin-top: 4px; }
+  .bar-fill { height: 6px; border-radius: 4px; background: #26a69a; transition: width .3s; }
+  .refresh { background: #26a69a22; border: 1px solid #26a69a; color: #26a69a; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 11px; margin-bottom: 20px; }
+  .refresh:hover { background: #26a69a44; }
+  .loading { color: #64748b; font-size: 12px; text-align: center; padding: 40px; }
+  .alert-div { color: #a78bfa; }
+  .tip { background: #12121a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px 16px; font-size: 11px; color: #64748b; margin-bottom: 20px; line-height: 1.6; }
+  .tip b { color: #94a3b8; }
+</style>
+</head>
+<body>
+
+<h1>📊 Estadísticas de Señales</h1>
+<p class="sub">Trading Dashboard PRO v7 — Tracker de resultados automático</p>
+
+<button class="refresh" onclick="load()">↺ Actualizar</button>
+
+<div class="tip">
+  <b>¿Cómo funciona?</b> Cada señal enviada a Telegram se registra aquí con su precio de entrada.
+  El sistema verifica automáticamente si el precio fue en la dirección correcta a <b>1h, 4h y 24h</b>.
+  Con suficientes datos (2-3 semanas) podrás ver qué pares, timeframes y condiciones funcionan mejor.
+</div>
+
+<div id="CONTENT"><div class="loading">Cargando estadísticas...</div></div>
+
+<script>
+const fp = v => !v || isNaN(v) ? '—' : v > 100 ? v.toLocaleString('en-US', {maximumFractionDigits:0}) : v.toFixed(4);
+const pct = v => v != null ? `${v}%` : '—';
+
+function pctColor(v) {
+  if (v == null) return 'neu';
+  if (v >= 60)   return 'win';
+  if (v < 45)    return 'loss';
+  return 'neu';
+}
+
+function badgeResult(r) {
+  if (!r) return '<span class="badge badge-pend">Pendiente</span>';
+  return r === 'WIN'
+    ? '<span class="badge badge-win">WIN ✓</span>'
+    : '<span class="badge badge-loss">LOSS ✗</span>';
+}
+
+async function load() {
+  const el = document.getElementById('CONTENT');
+  el.innerHTML = '<div class="loading">Cargando...</div>';
+  try {
+    const res  = await fetch('/api/tracker');
+    const data = await res.json();
+
+    if (!data.ok || data.total === 0) {
+      el.innerHTML = '<div class="loading">Sin señales registradas aún. Las señales aparecerán aquí después de las primeras alertas enviadas a Telegram.</div>';
+      return;
+    }
+
+    const o = data.overall;
+    el.innerHTML = `
+      <!-- RESUMEN GENERAL -->
+      <div class="grid">
+        <div class="card">
+          <div class="card-title">Total señales</div>
+          <div class="card-val neu">${data.total}</div>
+          <div class="card-sub">${data.pending} pendientes de evaluar</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Acierto a 1h</div>
+          <div class="card-val ${pctColor(o.h1?.pct)}">${pct(o.h1?.pct)}</div>
+          <div class="card-sub">${o.h1?.wins || 0} WIN / ${o.h1?.total || 0} evaluadas</div>
+          <div class="bar-wrap"><div class="bar-fill" style="width:${o.h1?.pct || 0}%"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Acierto a 4h</div>
+          <div class="card-val ${pctColor(o.h4?.pct)}">${pct(o.h4?.pct)}</div>
+          <div class="card-sub">${o.h4?.wins || 0} WIN / ${o.h4?.total || 0} evaluadas</div>
+          <div class="bar-wrap"><div class="bar-fill" style="width:${o.h4?.pct || 0}%"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Acierto a 24h</div>
+          <div class="card-val ${pctColor(o.h24?.pct)}">${pct(o.h24?.pct)}</div>
+          <div class="card-sub">${o.h24?.wins || 0} WIN / ${o.h24?.total || 0} evaluadas</div>
+          <div class="bar-wrap"><div class="bar-fill" style="width:${o.h24?.pct || 0}%"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">LONG vs SHORT (1h)</div>
+          <div style="display:flex;gap:16px;margin-top:4px;">
+            <div>
+              <div class="card-sub">LONG</div>
+              <div class="card-val win" style="font-size:20px">${pct(data.byDir?.LONG?.pct1h)}</div>
+              <div class="card-sub">${data.byDir?.LONG?.total || 0} señales</div>
+            </div>
+            <div>
+              <div class="card-sub">SHORT</div>
+              <div class="card-val loss" style="font-size:20px">${pct(data.byDir?.SHORT?.pct1h)}</div>
+              <div class="card-sub">${data.byDir?.SHORT?.total || 0} señales</div>
+            </div>
+          </div>
+        </div>
+        ${data.topFailingCondition ? `
+        <div class="card">
+          <div class="card-title">Condición que más falla</div>
+          <div class="card-val loss" style="font-size:16px">${data.topFailingCondition.name}</div>
+          <div class="card-sub">Ausente en ${data.topFailingCondition.count} señales</div>
+        </div>` : ''}
+      </div>
+
+      <!-- POR TIMEFRAME -->
+      <div class="section">
+        <h2>Rendimiento por Timeframe</h2>
+        <table>
+          <tr><th>TF</th><th>Total</th><th>Acierto 1h</th><th>Acierto 4h</th></tr>
+          ${data.byTF.map(r => `
+          <tr>
+            <td><b>${r.tf}</b></td>
+            <td>${r.total}</td>
+            <td class="${pctColor(r.h1?.pct)}">${pct(r.h1?.pct)} <span style="color:#64748b">(${r.h1?.wins||0}/${r.h1?.total||0})</span></td>
+            <td class="${pctColor(r.h4?.pct)}">${pct(r.h4?.pct)} <span style="color:#64748b">(${r.h4?.wins||0}/${r.h4?.total||0})</span></td>
+          </tr>`).join('')}
+        </table>
+      </div>
+
+      <!-- POR PAR -->
+      <div class="section">
+        <h2>Rendimiento por Par (Top 10)</h2>
+        <table>
+          <tr><th>Par</th><th>Total</th><th>Acierto 1h</th></tr>
+          ${data.byPair.map(r => `
+          <tr>
+            <td><b>${r.sym}</b></td>
+            <td>${r.total}</td>
+            <td class="${pctColor(r.h1?.pct)}">${pct(r.h1?.pct)} <span style="color:#64748b">(${r.h1?.wins||0}/${r.h1?.total||0})</span></td>
+          </tr>`).join('')}
+        </table>
+      </div>
+
+      <!-- HISTORIAL -->
+      <div class="section">
+        <h2>Últimas 50 señales</h2>
+        <table>
+          <tr><th>Fecha MX</th><th>Par</th><th>TF</th><th>Señal</th><th>Score</th><th>Entrada</th><th>1h</th><th>4h</th><th>24h</th></tr>
+          ${data.signals.map(s => {
+            const date = new Date(s.sentAt).toLocaleString('es-MX', {timeZone:'America/Mexico_City', dateStyle:'short', timeStyle:'short'});
+            const isDiv = s.isDivergence;
+            return `<tr>
+              <td style="color:#64748b;font-size:10px">${date}</td>
+              <td><b>${s.sym}</b></td>
+              <td>${s.tf}</td>
+              <td>
+                <span class="badge ${s.signal==='LONG'?'badge-long':'badge-short'}">${s.signal}</span>
+                ${isDiv ? '<span class="alert-div" title="Divergencia RSI"> 📐</span>' : ''}
+              </td>
+              <td>${s.score}/${s.max}</td>
+              <td>${fp(s.entryPrice)}</td>
+              <td>${badgeResult(s.result1h)}</td>
+              <td>${badgeResult(s.result4h)}</td>
+              <td>${badgeResult(s.result24h)}</td>
+            </tr>`;
+          }).join('')}
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="loading" style="color:#ef5350">Error: ${e.message}</div>`;
+  }
+}
+
+load();
+setInterval(load, 60000); // auto-refresh cada minuto
+</script>
+</body>
+</html>
