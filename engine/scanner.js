@@ -1,19 +1,10 @@
 // ═══════════════════════════════════════════════════════════════
 //  engine/scanner.js  —  Trading Dashboard PRO v7
 //  Motor de Escaneo Autónomo 24/7
-//
-//  Horario México (America/Mexico_City):
-//    8am–12pm  → score ≥ 6/8, cooldown 15 min
-//    2pm–6pm   → score ≥ 6/8, cooldown 15 min
-//    8pm–12am  → score ≥ 7/8, cooldown 20 min
-//    resto     → PAUSADO automático
-//
-//  Filtro anti-contradicción:
-//    Si en los últimos 15 min se envió LONG de BTC (cualquier TF),
-//    se bloquea cualquier SHORT de BTC hasta que pase ese tiempo.
 // ═══════════════════════════════════════════════════════════════
 import { scoreSignal, TF_CONFIG, TF_PARENT } from './signals.js';
 import { sendTelegram, buildAlertMessage }    from './telegram.js';
+import { trackSignal, evaluatePending }       from './tracker.js';
 
 export const STATE = {
   signals:      {},
@@ -27,11 +18,11 @@ export const STATE = {
   session:      null,
 };
 
-const alertCooldown  = {};   // cooldown por par+TF
-const lastDirSent    = {};   // { 'BTCUSDT': { dir: 'up', time: Date.now() } }
+const alertCooldown  = {};
+const lastDirSent    = {};
 const mayorCache     = {};
 const MAYOR_CACHE_MS = 3 * 60 * 1000;
-const ANTI_CONTRA_MS = 15 * 60 * 1000; // ventana anti-contradicción
+const ANTI_CONTRA_MS = 15 * 60 * 1000;
 
 // ── SESIÓN ACTIVA ────────────────────────────────────────────────
 function getSession() {
@@ -46,22 +37,18 @@ function getSession() {
 }
 
 // ── FILTRO ANTI-CONTRADICCIÓN ────────────────────────────────────
-// Retorna true si la señal está bloqueada por una señal contraria reciente
 function isContradicted(sym, dir) {
   const last = lastDirSent[sym];
   if (!last) return false;
-  const isOpposite = last.dir !== dir;
-  const isRecent   = Date.now() - last.time < ANTI_CONTRA_MS;
-  return isOpposite && isRecent;
+  return last.dir !== dir && Date.now() - last.time < ANTI_CONTRA_MS;
 }
 
-// Registra la dirección enviada para un símbolo
 function registerSent(sym, dir) {
   lastDirSent[sym] = { dir, time: Date.now() };
 }
 
 // ── FETCH CANDLES ────────────────────────────────────────────────
-async function fetchCandles(symbol, interval, limit = 500) {
+export async function fetchCandles(symbol, interval, limit = 500) {
   const endpoints = [
     'https://data-api.binance.vision/api/v3/klines',
     'https://api1.binance.com/api/v3/klines',
@@ -115,6 +102,8 @@ async function runCycle(config) {
   STATE.session = session ? session.name : 'Fuera de horario';
   if (!session) {
     console.log(`[SCANNER] Fuera de horario — pausado hasta próxima sesión.`);
+    // Aun fuera de horario evaluamos resultados pendientes
+    await evaluatePending(fetchCandles).catch(() => {});
     return;
   }
 
@@ -139,7 +128,6 @@ async function runCycle(config) {
         const sig = scoreSignal(candles, tf, TF_CONFIG, mayorCandles);
         if (!sig || sig.signal === 'WAIT') continue;
 
-        // ── Verificar si pasa los filtros de score ───────────────
         const divAligned = sig.divergence &&
           ((sig.dir === 'up' && sig.divergence === 'bullish') ||
            (sig.dir === 'dn' && sig.divergence === 'bearish'));
@@ -149,33 +137,34 @@ async function runCycle(config) {
 
         if (!passNormal && !passDiv) continue;
 
-        // ── FILTRO ANTI-CONTRADICCIÓN ────────────────────────────
+        // Filtro anti-contradicción
         if (isContradicted(sym, sig.dir)) {
-          const last     = lastDirSent[sym];
-          const restMin  = Math.ceil((ANTI_CONTRA_MS - (Date.now() - last.time)) / 60000);
-          const dirLabel = sig.signal === 'LONG' ? 'LONG' : 'SHORT';
-          console.log(`   🚫 [ANTI-CONTRA] ${sym} ${tf} — ${dirLabel} bloqueado (señal contraria hace ${15 - restMin} min, espera ${restMin} min más)`);
+          const last    = lastDirSent[sym];
+          const restMin = Math.ceil((ANTI_CONTRA_MS - (Date.now() - last.time)) / 60000);
+          console.log(`   🚫 [ANTI-CONTRA] ${sym} ${tf} — ${sig.signal} bloqueado (espera ${restMin} min más)`);
           continue;
         }
 
         activeThisCycle.add(key);
-        STATE.signals[key] = { sym, tf, ...sig, isDivergence: passDiv && !passNormal };
+        const isDivergence = passDiv && !passNormal;
+        STATE.signals[key] = { sym, tf, ...sig, isDivergence };
 
         const now = Date.now();
         if (!alertCooldown[key] || now - alertCooldown[key] > session.cooldownMs) {
           alertCooldown[key] = now;
-
-          // Registrar dirección enviada para este símbolo (anti-contradicción)
           registerSent(sym, sig.dir);
 
-          const text = buildAlertMessage(sym, tf, sig, passDiv && !passNormal);
+          const text = buildAlertMessage(sym, tf, sig, isDivergence);
           if (config.telegram.token && config.telegram.chatId) {
             const result = await sendTelegram(config.telegram.token, config.telegram.chatId, text);
-            const tag    = passDiv && !passNormal ? '📐 DIV' : '✅';
-            if (result.ok)
+            const tag    = isDivergence ? '📐 DIV' : '✅';
+            if (result.ok) {
               console.log(`   ${tag} [ALERTA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/8)`);
-            else
+              // Registrar en tracker para evaluar después
+              await trackSignal(sym, tf, sig, isDivergence).catch(() => {});
+            } else {
               console.log(`   ❌ [ERR TELEGRAM] ${JSON.stringify(result)}`);
+            }
           }
         }
 
@@ -193,6 +182,9 @@ async function runCycle(config) {
   const removed = before - Object.keys(STATE.signals).length;
   if (removed > 0) console.log(`   🧹 ${removed} señal(es) vencida(s) eliminada(s).`);
 
+  // Evaluar resultados pendientes de señales anteriores
+  await evaluatePending(fetchCandles).catch(() => {});
+
   STATE.isScanning = false;
   console.log(`[SCAN #${STATE.scanCount}] Completado. Señales activas: ${Object.keys(STATE.signals).length}`);
 }
@@ -202,6 +194,7 @@ export function startScanner(config) {
   console.log('╔══════════════════════════════════════════╗');
   console.log('║  Motor Autónomo 24/7 INICIADO  v7        ║');
   console.log('║  MACD + ADX + Div RSI + Anti-Contra      ║');
+  console.log('║  Tracker de resultados ACTIVO            ║');
   console.log('║  Horario México activado                 ║');
   console.log('╚══════════════════════════════════════════╝');
   STATE.daemonActive = true;
