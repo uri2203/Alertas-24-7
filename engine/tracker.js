@@ -7,14 +7,19 @@
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY || '';
 const JSONBIN_BASE    = 'https://api.jsonbin.io/v3';
 
-let BIN_ID = process.env.JSONBIN_BIN_ID || ''; // se crea automáticamente si no existe
+// BIN_ID se toma de la variable de entorno — si no existe se crea uno nuevo
+let BIN_ID = process.env.JSONBIN_BIN_ID || '';
 
 // ── INICIALIZAR BIN ───────────────────────────────────────────────
 async function initBin() {
-  if (BIN_ID) return; // ya tenemos bin
+  if (BIN_ID) return; // ya tenemos bin configurado
+  if (!JSONBIN_API_KEY) {
+    console.error('[TRACKER] ❌ JSONBIN_API_KEY no configurada en Render.');
+    return;
+  }
 
   try {
-    const res = await fetch(`${JSONBIN_BASE}/b`, {
+    const res  = await fetch(`${JSONBIN_BASE}/b`, {
       method:  'POST',
       headers: {
         'Content-Type':  'application/json',
@@ -24,10 +29,20 @@ async function initBin() {
       },
       body: JSON.stringify({ signals: [] }),
     });
-    const data = await res.json();
-    BIN_ID = data.metadata?.id || '';
-    console.log(`[TRACKER] Bin creado: ${BIN_ID}`);
-    console.log(`[TRACKER] ⚠️  Agrega esta variable en Render: JSONBIN_BIN_ID=${BIN_ID}`);
+
+    const text = await res.text();
+    console.log('[TRACKER] Respuesta JSONbin al crear bin:', text);
+
+    const data = JSON.parse(text);
+    const id   = data?.metadata?.id || data?.record || '';
+
+    if (id) {
+      BIN_ID = id;
+      console.log(`[TRACKER] ✅ Bin creado correctamente: ${BIN_ID}`);
+      console.log(`[TRACKER] ⚠️  AGREGA EN RENDER → Environment: JSONBIN_BIN_ID=${BIN_ID}`);
+    } else {
+      console.error('[TRACKER] ❌ No se pudo obtener el ID del bin. Respuesta:', text);
+    }
   } catch (e) {
     console.error(`[TRACKER] Error creando bin: ${e.message}`);
   }
@@ -69,6 +84,7 @@ async function writeSignals(signals) {
 export async function trackSignal(sym, tf, sig, isDivergence = false) {
   if (!JSONBIN_API_KEY) return;
   await initBin();
+  if (!BIN_ID) return;
 
   const signals = await readSignals();
   const record  = {
@@ -86,7 +102,6 @@ export async function trackSignal(sym, tf, sig, isDivergence = false) {
     isDivergence,
     rules:        sig.rules,
     sentAt:       new Date().toISOString(),
-    // Resultados se llenan después
     result1h:     null,
     result4h:     null,
     result24h:    null,
@@ -96,9 +111,7 @@ export async function trackSignal(sym, tf, sig, isDivergence = false) {
     evaluated:    false,
   };
 
-  signals.unshift(record); // más reciente primero
-
-  // Mantener máximo 200 señales
+  signals.unshift(record);
   if (signals.length > 200) signals.splice(200);
 
   await writeSignals(signals);
@@ -106,11 +119,12 @@ export async function trackSignal(sym, tf, sig, isDivergence = false) {
 }
 
 // ── EVALUAR RESULTADOS PENDIENTES ─────────────────────────────────
-// Se llama cada ciclo del scanner para revisar señales cuyo tiempo ya pasó
 export async function evaluatePending(fetchCandlesFn) {
   if (!JSONBIN_API_KEY || !BIN_ID) return;
 
   const signals  = await readSignals();
+  if (!signals.length) return;
+
   let   modified = false;
   const now      = Date.now();
 
@@ -120,39 +134,30 @@ export async function evaluatePending(fetchCandlesFn) {
     const sentMs  = new Date(rec.sentAt).getTime();
     const elapsed = now - sentMs;
 
-    // Obtener precio actual para este par
     let currentPrice = null;
     try {
-      const candles  = await fetchCandlesFn(rec.sym, '1m', 2);
-      currentPrice   = candles?.[candles.length - 1]?.close || null;
+      const candles = await fetchCandlesFn(rec.sym, '1m', 2);
+      currentPrice  = candles?.[candles.length - 1]?.close || null;
     } catch (_) {}
 
     if (!currentPrice) continue;
 
-    const isLong = rec.signal === 'LONG';
-
-    // Resultado: WIN si el precio fue en la dirección correcta
+    const isLong     = rec.signal === 'LONG';
     const calcResult = (refPrice, curPrice) => {
       if (!refPrice || !curPrice) return null;
-      const moved = isLong ? curPrice > refPrice : curPrice < refPrice;
-      return moved ? 'WIN' : 'LOSS';
+      return (isLong ? curPrice > refPrice : curPrice < refPrice) ? 'WIN' : 'LOSS';
     };
 
-    // Evaluar 1h
     if (!rec.result1h && elapsed >= 60 * 60 * 1000) {
       rec.price1h  = currentPrice;
       rec.result1h = calcResult(rec.entryPrice, currentPrice);
       modified     = true;
     }
-
-    // Evaluar 4h
     if (!rec.result4h && elapsed >= 4 * 60 * 60 * 1000) {
       rec.price4h  = currentPrice;
       rec.result4h = calcResult(rec.entryPrice, currentPrice);
       modified     = true;
     }
-
-    // Evaluar 24h — marcar como completamente evaluada
     if (!rec.result24h && elapsed >= 24 * 60 * 60 * 1000) {
       rec.price24h  = currentPrice;
       rec.result24h = calcResult(rec.entryPrice, currentPrice);
@@ -169,6 +174,7 @@ export async function evaluatePending(fetchCandlesFn) {
 
 // ── ESTADÍSTICAS ──────────────────────────────────────────────────
 export async function getStats() {
+  if (!BIN_ID) await initBin();
   const signals = await readSignals();
   if (!signals.length) return { total: 0, signals: [] };
 
@@ -179,7 +185,6 @@ export async function getStats() {
     return { wins, total: valid.length, pct: Math.round(wins / valid.length * 100) };
   };
 
-  // Por par
   const byPair = {};
   const byTF   = {};
   const byDir  = { LONG: { wins1h: 0, total1h: 0 }, SHORT: { wins1h: 0, total1h: 0 } };
@@ -189,50 +194,40 @@ export async function getStats() {
     byPair[s.sym].push(s);
     if (!byTF[s.tf]) byTF[s.tf] = [];
     byTF[s.tf].push(s);
-    if (s.result1h) {
+    if (s.result1h && byDir[s.signal]) {
       byDir[s.signal].total1h++;
       if (s.result1h === 'WIN') byDir[s.signal].wins1h++;
     }
   }
 
-  // Condición que más falla (la que aparece como false más veces)
   const condFails = {};
   for (const s of signals) {
     if (!s.rules) continue;
-    for (const [k, v] of Object.entries(s.rules)) {
-      if (typeof v === 'boolean' && !v) {
+    for (const [k, v] of Object.entries(s.rules))
+      if (typeof v === 'boolean' && !v)
         condFails[k] = (condFails[k] || 0) + 1;
-      }
-    }
   }
   const topFail = Object.entries(condFails).sort((a, b) => b[1] - a[1])[0];
 
   return {
-    total:    signals.length,
-    pending:  signals.filter(s => !s.evaluated).length,
+    total:   signals.length,
+    pending: signals.filter(s => !s.evaluated).length,
     overall: {
       h1:  calc(signals, 'result1h'),
       h4:  calc(signals, 'result4h'),
       h24: calc(signals, 'result24h'),
     },
     byPair: Object.entries(byPair).map(([sym, arr]) => ({
-      sym,
-      total: arr.length,
-      h1: calc(arr, 'result1h'),
+      sym, total: arr.length, h1: calc(arr, 'result1h'),
     })).sort((a, b) => b.total - a.total).slice(0, 10),
     byTF: Object.entries(byTF).map(([tf, arr]) => ({
-      tf,
-      total: arr.length,
-      h1: calc(arr, 'result1h'),
-      h4: calc(arr, 'result4h'),
+      tf, total: arr.length, h1: calc(arr, 'result1h'), h4: calc(arr, 'result4h'),
     })).sort((a, b) => b.total - a.total),
     byDir: {
       LONG:  { total: byDir.LONG.total1h,  pct1h: byDir.LONG.total1h  ? Math.round(byDir.LONG.wins1h  / byDir.LONG.total1h  * 100) : null },
       SHORT: { total: byDir.SHORT.total1h, pct1h: byDir.SHORT.total1h ? Math.round(byDir.SHORT.wins1h / byDir.SHORT.total1h * 100) : null },
     },
     topFailingCondition: topFail ? { name: topFail[0], count: topFail[1] } : null,
-    signals: signals.slice(0, 50), // últimas 50 para la tabla
+    signals: signals.slice(0, 50),
   };
 }
-
-export { readSignals };
