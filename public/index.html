@@ -314,6 +314,7 @@ tr:hover td{background:var(--bg3)}
     <div class="eng-row">
       <span class="edot" id="EDOT"></span>
       <span id="EMSG">Motor: Verificando...</span>
+      <span id="EW-STATUS" style="font-size:9px;color:#64748b;margin-left:8px;"></span>
       <span class="sep"></span>
       <span class="wdot" id="WDOT"></span>
       <span id="WMSG">WS...</span>
@@ -883,21 +884,26 @@ function detectEW(cc, tf) {
 
     if (!found.length) return [];
 
-    // Ordenar por relevancia: primero el más reciente al precio actual,
-    // luego el que tiene más puntos (más completo), luego lookback menor (más preciso)
-    found.sort((a, b) => {
+    // Filtrar solo patrones cuyo ÚLTIMO punto esté en la mitad derecha del gráfico
+    // (evita patrones antiguos irrelevantes al precio actual)
+    const midTime = cc[Math.floor(cc.length / 2)].time;
+    const recent  = found.filter(p => p.pts[p.pts.length - 1].time >= midTime);
+    const pool    = recent.length ? recent : found;
+
+    // Ordenar: más cercano al precio actual primero, luego más completo
+    pool.sort((a, b) => {
       if (a.recency !== b.recency) return a.recency - b.recency;
       if (b.pts.length !== a.pts.length) return b.pts.length - a.pts.length;
       return a.lb - b.lb;
     });
 
-    // Devolver los 2 más relevantes (sin duplicados por lookback)
+    // Devolver SOLO el mejor patrón (sin ruido visual)
     const seen = new Set();
     const best = [];
-    for (const p of found) {
+    for (const p of pool) {
       const key = `${p.dir}-${p.pts[0].time}`;
       if (!seen.has(key)) { seen.add(key); best.push(p); }
-      if (best.length >= 2) break;
+      if (best.length >= 1) break;
     }
     return best;
   }, []);
@@ -1048,6 +1054,24 @@ function renderElliottWaves(cc, tf) {
   safe(() => {
     if (!SH.ew || !cc || !cc.length) return;
     const pats = detectEW(cc, tf);
+
+    // Actualizar panel de estado Elliott (siempre, aunque no haya patrón)
+    const ewEl = document.getElementById('EW-STATUS');
+    if (ewEl) {
+      if (!pats || !pats.length) {
+        ewEl.textContent = `EW ${TFC[tf]?.deg || tf} — Sin patrón claro`;
+        ewEl.style.color = '#64748b';
+      } else {
+        const p = pats[0];
+        const wLabel = p.lbl[p.waveNow - 1] || p.waveNow;
+        const warn   = p.waveNow >= 4
+          ? (p.waveNow === 5 ? ' ⚠️ Onda 5 — impulso puede terminar' : ' ⏳ Onda 4 — corrección, esperar onda 5')
+          : '';
+        ewEl.textContent = `EW ${p.deg} · ${p.dir === 'up' ? '▲' : '▼'} · En onda ${wLabel}${warn}`;
+        ewEl.style.color = p.waveNow >= 5 ? '#ef5350' : p.waveNow === 4 ? '#f59e0b' : '#26a69a';
+      }
+    }
+
     if (!pats || !pats.length) return;
 
     const cfg = TFC[tf] || TFC['1h'];
@@ -1749,6 +1773,14 @@ function switchTF(el, tf) {
     curTF = tf;
     document.querySelectorAll('.tfb').forEach(b => b.classList.remove('on'));
     if (el && el.classList) el.classList.add('on');
+    // Limpiar líneas Elliott del TF anterior
+    ewLines.forEach(s => { try { chart.removeSeries(s); } catch(e) {} });
+    ewLines = [];
+    ewMarkersBuf = [];
+    if (cSer) try { cSer.setMarkers([]); } catch(e) {}
+    // Limpiar estado Elliott
+    const ewEl = document.getElementById('EW-STATUS');
+    if (ewEl) { ewEl.textContent = ''; }
     setChartData(); connectWS();
   });
 }
