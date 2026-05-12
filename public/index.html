@@ -825,9 +825,9 @@ function detectEW(cc, tf) {
         // ── PATRÓN ALCISTA ────────────────────────────────────────
         if (up && w.length >= 5) {
           const w1  = w[1].p - w[0].p; if (w1 <= 0) continue;
-          const w2r = (w[1].p - w[2].p) / w1; if (w2r < .3 || w2r > .82) continue;
-          const w3  = w[3].p - w[2].p; if (w3 < w1 * .88) continue;
-          const w4r = (w[3].p - w[4].p) / w3; if (w4r < .18 || w4r > .65) continue;
+          const w2r = (w[1].p - w[2].p) / w1; if (w2r < .25 || w2r > .85) continue;
+          const w3  = w[3].p - w[2].p; if (w3 < w1 * .60) continue;
+          const w4r = (w[3].p - w[4].p) / w3; if (w4r < .15 || w4r > .70) continue;
           if (w[4].p <= w[1].p) continue;
 
           // Calcular onda actual (en qué onda está el precio ahora)
@@ -855,9 +855,9 @@ function detectEW(cc, tf) {
         // ── PATRÓN BAJISTA ────────────────────────────────────────
         if (!up && w.length >= 5) {
           const w1  = w[0].p - w[1].p; if (w1 <= 0) continue;
-          const w2r = (w[2].p - w[1].p) / w1; if (w2r < .3 || w2r > .82) continue;
-          const w3  = w[2].p - w[3].p; if (w3 < w1 * .88) continue;
-          const w4r = (w[4].p - w[3].p) / w3; if (w4r < .18 || w4r > .65) continue;
+          const w2r = (w[2].p - w[1].p) / w1; if (w2r < .25 || w2r > .85) continue;
+          const w3  = w[2].p - w[3].p; if (w3 < w1 * .60) continue;
+          const w4r = (w[4].p - w[3].p) / w3; if (w4r < .15 || w4r > .70) continue;
           if (w[4].p >= w[1].p) continue;
 
           const pts     = w.slice(0, 5);
@@ -1071,17 +1071,25 @@ function renderElliottWaves(cc, tf) {
       });
 
       if (lineData.length >= 2) {
-        const lineSer = chart.addLineSeries({
-          color: pat.ewCol,
-          lineWidth: cfg.ewWidth,
-          lineStyle: pat.pts.length < 5 ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid,
-          title: `EW ${cfg.deg}`,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        });
-        lineSer.setData(lineData);
-        xSer.push(lineSer);
-        ewLines.push(lineSer);
+        // Deduplicar timestamps — LightweightCharts los exige únicos y ascendentes
+        const seenT = new Set();
+        const cleanLine = lineData
+          .sort((a, b) => a.time - b.time)
+          .filter(p => { if (seenT.has(p.time)) return false; seenT.add(p.time); return true; });
+
+        if (cleanLine.length >= 2) {
+          const lineSer = chart.addLineSeries({
+            color: pat.ewCol,
+            lineWidth: cfg.ewWidth,
+            lineStyle: pat.pts.length < 5 ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid,
+            title: `EW ${cfg.deg}`,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          lineSer.setData(cleanLine);
+          xSer.push(lineSer);
+          ewLines.push(lineSer);
+        }
       }
 
       // ── Proyección W5 si tenemos W1-W4 completas ────────────
@@ -1133,7 +1141,16 @@ function renderElliottWaves(cc, tf) {
       if (markers.length) ewMarkersBuf.push(...markers);
     });
 
-    if (cSer && ewMarkersBuf.length) cSer.setMarkers(ewMarkersBuf.slice().sort((a,b) => a.time - b.time));
+    if (cSer && ewMarkersBuf.length) {
+      const mMap = new Map();
+      ewMarkersBuf
+        .sort((a, b) => a.time - b.time)
+        .forEach(m => {
+          if (mMap.has(m.time)) mMap.get(m.time).text += ' ' + m.text;
+          else mMap.set(m.time, { ...m });
+        });
+      cSer.setMarkers([...mMap.values()]);
+    }
   });
 }
 
