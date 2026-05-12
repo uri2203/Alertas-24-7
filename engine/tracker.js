@@ -7,17 +7,25 @@
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY || '';
 const JSONBIN_BASE    = 'https://api.jsonbin.io/v3';
 
-// BIN_ID se toma de la variable de entorno — si no existe se crea uno nuevo
-let BIN_ID = process.env.JSONBIN_BIN_ID || '';
+let BIN_ID      = process.env.JSONBIN_BIN_ID || '';
+let initDone    = false;
+let initPromise = null;
 
-// ── INICIALIZAR BIN ───────────────────────────────────────────────
+// ── INICIALIZAR BIN AL ARRANCAR ───────────────────────────────────
 async function initBin() {
-  if (BIN_ID) return; // ya tenemos bin configurado
+  // Si ya hay BIN_ID en env, no crear uno nuevo
+  if (BIN_ID) {
+    console.log(`[TRACKER] ✅ Bin cargado desde variable de entorno: ${BIN_ID}`);
+    initDone = true;
+    return;
+  }
+
   if (!JSONBIN_API_KEY) {
     console.error('[TRACKER] ❌ JSONBIN_API_KEY no configurada en Render.');
     return;
   }
 
+  console.log('[TRACKER] Creando bin en JSONbin.io...');
   try {
     const res  = await fetch(`${JSONBIN_BASE}/b`, {
       method:  'POST',
@@ -31,25 +39,40 @@ async function initBin() {
     });
 
     const text = await res.text();
-    console.log('[TRACKER] Respuesta JSONbin al crear bin:', text);
+    console.log('[TRACKER] Respuesta JSONbin:', text);
 
-    const data = JSON.parse(text);
-    const id   = data?.metadata?.id || data?.record || '';
+    let data;
+    try { data = JSON.parse(text); } catch (_) {
+      console.error('[TRACKER] ❌ Respuesta no es JSON válido');
+      return;
+    }
 
+    const id = data?.metadata?.id || '';
     if (id) {
-      BIN_ID = id;
-      console.log(`[TRACKER] ✅ Bin creado correctamente: ${BIN_ID}`);
-      console.log(`[TRACKER] ⚠️  AGREGA EN RENDER → Environment: JSONBIN_BIN_ID=${BIN_ID}`);
+      BIN_ID   = id;
+      initDone = true;
+      console.log(`[TRACKER] ✅ Bin creado: ${BIN_ID}`);
+      console.log(`[TRACKER] ══════════════════════════════════════════`);
+      console.log(`[TRACKER] AGREGA EN RENDER → Environment Variables:`);
+      console.log(`[TRACKER] JSONBIN_BIN_ID = ${BIN_ID}`);
+      console.log(`[TRACKER] ══════════════════════════════════════════`);
     } else {
-      console.error('[TRACKER] ❌ No se pudo obtener el ID del bin. Respuesta:', text);
+      console.error('[TRACKER] ❌ JSONbin no devolvió un ID. Respuesta completa:', text);
     }
   } catch (e) {
     console.error(`[TRACKER] Error creando bin: ${e.message}`);
   }
 }
 
+// Garantizar que initBin solo corre una vez aunque se llame varias veces
+function ensureInit() {
+  if (!initPromise) initPromise = initBin();
+  return initPromise;
+}
+
 // ── LEER SEÑALES ─────────────────────────────────────────────────
 async function readSignals() {
+  await ensureInit();
   if (!BIN_ID || !JSONBIN_API_KEY) return [];
   try {
     const res  = await fetch(`${JSONBIN_BASE}/b/${BIN_ID}/latest`, {
@@ -82,8 +105,7 @@ async function writeSignals(signals) {
 
 // ── REGISTRAR SEÑAL ENVIADA ───────────────────────────────────────
 export async function trackSignal(sym, tf, sig, isDivergence = false) {
-  if (!JSONBIN_API_KEY) return;
-  await initBin();
+  await ensureInit();
   if (!BIN_ID) return;
 
   const signals = await readSignals();
@@ -113,16 +135,16 @@ export async function trackSignal(sym, tf, sig, isDivergence = false) {
 
   signals.unshift(record);
   if (signals.length > 200) signals.splice(200);
-
   await writeSignals(signals);
   console.log(`[TRACKER] ✍️  Señal registrada: ${sig.signal} ${sym} ${tf} @ ${sig.price}`);
 }
 
 // ── EVALUAR RESULTADOS PENDIENTES ─────────────────────────────────
 export async function evaluatePending(fetchCandlesFn) {
-  if (!JSONBIN_API_KEY || !BIN_ID) return;
+  await ensureInit();
+  if (!BIN_ID) return;
 
-  const signals  = await readSignals();
+  const signals = await readSignals();
   if (!signals.length) return;
 
   let   modified = false;
@@ -130,40 +152,22 @@ export async function evaluatePending(fetchCandlesFn) {
 
   for (const rec of signals) {
     if (rec.evaluated) continue;
-
-    const sentMs  = new Date(rec.sentAt).getTime();
-    const elapsed = now - sentMs;
+    const elapsed = now - new Date(rec.sentAt).getTime();
 
     let currentPrice = null;
     try {
       const candles = await fetchCandlesFn(rec.sym, '1m', 2);
       currentPrice  = candles?.[candles.length - 1]?.close || null;
     } catch (_) {}
-
     if (!currentPrice) continue;
 
     const isLong     = rec.signal === 'LONG';
-    const calcResult = (refPrice, curPrice) => {
-      if (!refPrice || !curPrice) return null;
-      return (isLong ? curPrice > refPrice : curPrice < refPrice) ? 'WIN' : 'LOSS';
-    };
+    const calcResult = (ref, cur) =>
+      (!ref || !cur) ? null : (isLong ? cur > ref : cur < ref) ? 'WIN' : 'LOSS';
 
-    if (!rec.result1h && elapsed >= 60 * 60 * 1000) {
-      rec.price1h  = currentPrice;
-      rec.result1h = calcResult(rec.entryPrice, currentPrice);
-      modified     = true;
-    }
-    if (!rec.result4h && elapsed >= 4 * 60 * 60 * 1000) {
-      rec.price4h  = currentPrice;
-      rec.result4h = calcResult(rec.entryPrice, currentPrice);
-      modified     = true;
-    }
-    if (!rec.result24h && elapsed >= 24 * 60 * 60 * 1000) {
-      rec.price24h  = currentPrice;
-      rec.result24h = calcResult(rec.entryPrice, currentPrice);
-      rec.evaluated = true;
-      modified      = true;
-    }
+    if (!rec.result1h  && elapsed >= 1  * 60 * 60 * 1000) { rec.price1h  = currentPrice; rec.result1h  = calcResult(rec.entryPrice, currentPrice); modified = true; }
+    if (!rec.result4h  && elapsed >= 4  * 60 * 60 * 1000) { rec.price4h  = currentPrice; rec.result4h  = calcResult(rec.entryPrice, currentPrice); modified = true; }
+    if (!rec.result24h && elapsed >= 24 * 60 * 60 * 1000) { rec.price24h = currentPrice; rec.result24h = calcResult(rec.entryPrice, currentPrice); rec.evaluated = true; modified = true; }
   }
 
   if (modified) {
@@ -174,7 +178,7 @@ export async function evaluatePending(fetchCandlesFn) {
 
 // ── ESTADÍSTICAS ──────────────────────────────────────────────────
 export async function getStats() {
-  if (!BIN_ID) await initBin();
+  await ensureInit();
   const signals = await readSignals();
   if (!signals.length) return { total: 0, signals: [] };
 
@@ -185,8 +189,7 @@ export async function getStats() {
     return { wins, total: valid.length, pct: Math.round(wins / valid.length * 100) };
   };
 
-  const byPair = {};
-  const byTF   = {};
+  const byPair = {}, byTF = {};
   const byDir  = { LONG: { wins1h: 0, total1h: 0 }, SHORT: { wins1h: 0, total1h: 0 } };
 
   for (const s of signals) {
@@ -201,12 +204,12 @@ export async function getStats() {
   }
 
   const condFails = {};
-  for (const s of signals) {
-    if (!s.rules) continue;
-    for (const [k, v] of Object.entries(s.rules))
-      if (typeof v === 'boolean' && !v)
-        condFails[k] = (condFails[k] || 0) + 1;
-  }
+  for (const s of signals)
+    if (s.rules)
+      for (const [k, v] of Object.entries(s.rules))
+        if (typeof v === 'boolean' && !v)
+          condFails[k] = (condFails[k] || 0) + 1;
+
   const topFail = Object.entries(condFails).sort((a, b) => b[1] - a[1])[0];
 
   return {
@@ -231,3 +234,7 @@ export async function getStats() {
     signals: signals.slice(0, 50),
   };
 }
+
+// ── INICIAR AL CARGAR EL MÓDULO ───────────────────────────────────
+// Se llama automáticamente cuando el servidor arranca
+ensureInit();
