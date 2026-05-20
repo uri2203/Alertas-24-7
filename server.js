@@ -8,11 +8,12 @@ import { fileURLToPath } from 'url';
 import * as dotenv       from 'dotenv';
 dotenv.config();
 
-import { configRouter }  from './routes/config.js';
-import { stateRouter }   from './routes/state.js';
-import { alertsRouter }  from './routes/alerts.js';
-import { trackerRouter } from './routes/tracker.js';
-import { startScanner }  from './engine/scanner.js';
+import { configRouter }   from './routes/config.js';
+import { stateRouter }    from './routes/state.js';
+import { alertsRouter }   from './routes/alerts.js';
+import { trackerRouter }  from './routes/tracker.js';
+import { drawingsRouter } from './routes/drawings.js';
+import { startScanner }   from './engine/scanner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,7 +37,8 @@ app.get('/ping',         (_, res) => res.json({ ok: true, time: new Date().toISO
 app.use('/api/config',   configRouter(CONFIG));
 app.use('/api/state',    stateRouter());
 app.use('/api/telegram', alertsRouter(CONFIG));
-app.use('/api/tracker',  trackerRouter());
+app.use('/api/tracker',   trackerRouter());
+app.use('/api/drawings',  drawingsRouter());
 
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
