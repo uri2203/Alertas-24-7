@@ -361,33 +361,57 @@ function detectSwings(candles, lb) {
 }
 
 function runElliott() {
-  if(candles.length<60){ewPat=null;updateEWBadge();return;}
-  const lb=Math.max(3,Math.floor(candles.length/35));
-  const sw=detectSwings(candles,lb);
-  const found=[];
-  for(let i=0;i+4<sw.length;i++){
-    const w=sw.slice(i,i+6);
-    let alt=true; for(let j=1;j<w.length;j++)if(w[j].t===w[j-1].t){alt=false;break;} if(!alt)continue;
-    const up=w[0].t==='L';
-    if(up&&w.length>=5){
+  if(candles.length<40){ewPat=null;updateEWBadge();return;}
+
+  // Buscar en múltiples escalas para mayor cobertura
+  const scales = [80, 150, 250, 400];
+  let bestPat = null;
+
+  for (const sliceLen of scales) {
+    const slice = candles.slice(-Math.min(sliceLen, candles.length));
+    if(slice.length < 30) continue;
+    const lb = Math.max(2, Math.floor(slice.length / 25));
+    const sw = detectSwings(slice, lb);
+    const pat = findPatternInSwings(sw);
+    if(pat) bestPat = pat; // Se queda con el más reciente encontrado
+  }
+
+  ewPat = bestPat;
+  updateEWBadge();
+}
+
+function findPatternInSwings(sw) {
+  const found = [];
+  for(let i=0; i+4<sw.length; i++){
+    const w = sw.slice(i, i+7);
+    // Verificar alternancia H/L
+    let alt=true;
+    for(let j=1;j<w.length;j++)
+      if(w[j].t===w[j-1].t){alt=false;break;}
+    if(!alt) continue;
+
+    const up = w[0].t==='L';
+
+    if(up && w.length>=5){
       const w1=w[1].p-w[0].p; if(w1<=0)continue;
-      const w2r=(w[1].p-w[2].p)/w1; if(w2r<.25||w2r>.85)continue;
-      const w3=w[3].p-w[2].p; if(w3<w1*.70)continue;
-      const w4r=(w[3].p-w[4].p)/w3; if(w4r<.15||w4r>.70)continue;
+      const w2r=(w[1].p-w[2].p)/w1; if(w2r<.18||w2r>.92)continue;
+      const w3=w[3].p-w[2].p; if(w3<w1*.55)continue;
+      const w4r=(w[3].p-w[4].p)/w3; if(w4r<.10||w4r>.78)continue;
       if(w[4].p<=w[1].p)continue;
-      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'up',w1,w3,w2r,w4r,wn:w.length>=6?5:4,w5tgt:w[w.length-1].p+w1*1.618});
+      const wn=w.length>=6?5:4;
+      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'up',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p+w1*1.618});
     }
-    if(!up&&w.length>=5){
+    if(!up && w.length>=5){
       const w1=w[0].p-w[1].p; if(w1<=0)continue;
-      const w2r=(w[2].p-w[1].p)/w1; if(w2r<.25||w2r>.85)continue;
-      const w3=w[2].p-w[3].p; if(w3<w1*.70)continue;
-      const w4r=(w[4].p-w[3].p)/w3; if(w4r<.15||w4r>.70)continue;
+      const w2r=(w[2].p-w[1].p)/w1; if(w2r<.18||w2r>.92)continue;
+      const w3=w[2].p-w[3].p; if(w3<w1*.55)continue;
+      const w4r=(w[4].p-w[3].p)/w3; if(w4r<.10||w4r>.78)continue;
       if(w[4].p>=w[1].p)continue;
-      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'dn',w1,w3,w2r,w4r,wn:w.length>=6?5:4,w5tgt:w[w.length-1].p-w1*1.618});
+      const wn=w.length>=6?5:4;
+      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'dn',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p-w1*1.618});
     }
   }
-  ewPat=found.length?found[found.length-1]:null;
-  updateEWBadge();
+  return found.length ? found[found.length-1] : null;
 }
 
 function updateEWBadge() {
