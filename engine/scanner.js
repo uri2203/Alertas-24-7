@@ -24,18 +24,29 @@ const mayorCache     = {};
 const MAYOR_CACHE_MS = 3 * 60 * 1000;
 const ANTI_CONTRA_MS = 15 * 60 * 1000;
 
+// ── CORRELACIÓN — agrupar cryptos que se mueven juntas ───────────
+// BTC domina: si BTC da señal, las demás del mismo grupo se descartan
+const CORR_GROUPS = [
+  ['BTCUSDT'],                    // BTC manda — señales independientes
+  ['ETHUSDT'],                    // ETH tiene alta correlación con BTC pero se evalúa sola
+  ['SOLUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT', 'XRPUSDT'],  // Alt-L1s — altamente correlacionadas
+  ['LINKUSDT', 'AVAXUSDT', 'DOTUSDT', 'MATICUSDT', 'LTCUSDT', 'UNIUSDT', 'NEARUSDT'],  // Mid-caps
+];
+const sentThisCycle = new Map(); // key: grupo → { dir, score, sym, tf }
+
 // ── SESIÓN ACTIVA ────────────────────────────────────────────────
 function getSession() {
   const mxStr  = new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' });
   const mxDate = new Date(mxStr);
   const h      = mxDate.getHours() + mxDate.getMinutes() / 60;
 
-  if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 6, minScoreDiv: 5, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 12 && h < 14) return { name: 'Mediodía', minScore: 7, minScoreDiv: 5, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 6, minScoreDiv: 5, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 18 && h < 20) return { name: 'atardecer', minScore: 7, minScoreDiv: 5, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 7, minScoreDiv: 5, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 0  && h < 8)  return { name: 'Madrugada', minScore: 7, minScoreDiv: 6, cooldownMs: 20 * 60 * 1000 };
+  // Score ponderado: total = 11.0, mínimo 7.0 para señal, 5.5 con divergencia
+  if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 7.0, minScoreDiv: 5.5, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 12 && h < 14) return { name: 'Mediodía', minScore: 7.5, minScoreDiv: 6.0, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 7.0, minScoreDiv: 5.5, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 18 && h < 20) return { name: 'atardecer', minScore: 7.5, minScoreDiv: 6.0, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 7.5, minScoreDiv: 6.0, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 0  && h < 8)  return { name: 'Madrugada', minScore: 8.0, minScoreDiv: 6.5, cooldownMs: 20 * 60 * 1000 };
   return null;
 }
 
@@ -114,9 +125,10 @@ async function runCycle(config) {
   STATE.scanCount++;
   STATE.lastScan = new Date().toISOString();
 
-  console.log(`\n[SCAN #${STATE.scanCount}] Sesión: ${session.name} | Score≥${session.minScore}/8 | Cooldown: ${session.cooldownMs / 60000}min`);
+  console.log(`\n[SCAN #${STATE.scanCount}] Sesión: ${session.name} | Score≥${session.minScore}/11 | Cooldown: ${session.cooldownMs / 60000}min`);
 
   const activeThisCycle = new Set();
+  sentThisCycle.clear();
 
   for (const sym of config.symbols) {
     for (const tf of config.tfs) {
@@ -148,6 +160,23 @@ async function runCycle(config) {
           continue;
         }
 
+        // Filtro de correlación: mismo grupo = solo la mejor señal
+        const group = CORR_GROUPS.find(g => g.includes(sym)) || [sym];
+        const groupKey = group.sort().join('-');
+        const existing = sentThisCycle.get(groupKey);
+        if (existing) {
+          if (existing.dir === sig.dir) {
+            // Misma dirección — solo enviar si la nueva señal es >1.5 puntos mejor
+            if (sig.score - existing.score < 1.5) {
+              console.log(`   🔗 [CORR] ${sym} ${tf} — ${sig.signal} (${sig.score}) descartada, ${existing.sym} ya tiene ${existing.dir} (${existing.score})`);
+              continue;
+            }
+            console.log(`   🔗 [CORR] ${sym} ${tf} — ${sig.signal} (${sig.score}) supera a ${existing.sym} (${existing.score})`);
+          }
+          // Dirección opuesta — permitir (diversificación)
+        }
+        sentThisCycle.set(groupKey, { dir: sig.dir, score: sig.score, sym, tf });
+
         activeThisCycle.add(key);
         const isDivergence = passDiv && !passNormal;
         STATE.signals[key] = { sym, tf, ...sig, isDivergence };
@@ -162,7 +191,7 @@ async function runCycle(config) {
             const result = await sendTelegram(config.telegram.token, config.telegram.chatId, text);
             const tag    = isDivergence ? '📐 DIV' : '✅';
             if (result.ok) {
-              console.log(`   ${tag} [ALERTA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/8)`);
+              console.log(`   ${tag} [ALERTA] ${sig.signal} ${sym} ${tf} (Score: ${sig.score}/11)`);
               // Registrar en tracker para evaluar después
               await trackSignal(sym, tf, sig, isDivergence).catch(() => {});
             } else {
@@ -195,8 +224,8 @@ async function runCycle(config) {
 // ── INICIO ───────────────────────────────────────────────────────
 export function startScanner(config) {
   console.log('╔══════════════════════════════════════════╗');
-  console.log('║  Motor Autónomo 24/7 INICIADO  v7        ║');
-  console.log('║  MACD + ADX + Div RSI + Anti-Contra      ║');
+  console.log('║  Motor Autónomo 24/7 INICIADO  v7.1      ║');
+  console.log('║  Ponderado + ATR + FibBounce + Corr      ║');
   console.log('║  Tracker de resultados ACTIVO            ║');
   console.log('║  Horario México activado                 ║');
   console.log('╚══════════════════════════════════════════╝');

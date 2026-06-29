@@ -328,10 +328,11 @@ tr:hover td{background:var(--bg3)}
           <div class="sig-hd">
             <div class="sig-lbl">Motor Scalping</div>
             <div style="display:flex;align-items:center;gap:3px">
-              <span class="snum up" id="SNS">0</span><span style="color:var(--tx2)">/4</span>
+              <span class="snum up" id="SNS">0</span><span style="color:var(--tx2)">/6</span>
               <div class="sdots">
                 <div class="sdot" id="SD0"></div><div class="sdot" id="SD1"></div>
                 <div class="sdot" id="SD2"></div><div class="sdot" id="SD3"></div>
+                <div class="sdot" id="SD4"></div><div class="sdot" id="SD5"></div>
               </div>
             </div>
           </div>
@@ -339,7 +340,9 @@ tr:hover td{background:var(--bg3)}
             <div class="rule fail" id="SR0"><span class="ri">—</span><div><div class="rn">HTF Elliott</div><div class="rv" id="SR0V">esperando</div></div></div>
             <div class="rule fail" id="SR1"><span class="ri">—</span><div><div class="rn">Hurst FLD</div><div class="rv" id="SR1V">esperando</div></div></div>
             <div class="rule fail" id="SR2"><span class="ri">—</span><div><div class="rn">Zona Fibonacci</div><div class="rv" id="SR2V">38.2–61.8%</div></div></div>
-            <div class="rule fail" id="SR3"><span class="ri">—</span><div><div class="rn">Confluencia Pivote</div><div class="rv" id="SR3V">PP/R1/S1</div></div></div>
+            <div class="rule fail" id="SR3"><span class="ri">—</span><div><div class="rn">Pivote ±0.3%</div><div class="rv" id="SR3V">PP/R1/S1</div></div></div>
+            <div class="rule fail" id="SR4"><span class="ri">—</span><div><div class="rn">MACD dirección</div><div class="rv" id="SR4V">momentum</div></div></div>
+            <div class="rule fail" id="SR5"><span class="ri">—</span><div><div class="rn">ADX > 25</div><div class="rv" id="SR5V">tendencia real</div></div></div>
           </div>
           <div class="sig-badge badge-wait" id="SBDG"><span class="di dw"></span>Esperando confluencia...</div>
         </div>
@@ -352,10 +355,10 @@ tr:hover td{background:var(--bg3)}
           <div class="sig-hd">
             <div class="sig-lbl">Motor Swing</div>
             <div style="display:flex;align-items:center;gap:3px">
-              <span class="snum neu" id="SNW">0</span><span style="color:var(--tx2)">/5</span>
+              <span class="snum neu" id="SNW">0</span><span style="color:var(--tx2)">/6</span>
               <div class="sdots">
                 <div class="sdot" id="WD0"></div><div class="sdot" id="WD1"></div>
-                <div class="sdot" id="WD2"></div><div class="sdot" id="WD3"></div><div class="sdot" id="WD4"></div>
+                <div class="sdot" id="WD2"></div><div class="sdot" id="WD3"></div><div class="sdot" id="WD4"></div><div class="sdot" id="WD5"></div>
               </div>
             </div>
           </div>
@@ -365,6 +368,7 @@ tr:hover td{background:var(--bg3)}
             <div class="rule fail" id="WR2"><span class="ri">—</span><div><div class="rn">Zona Fib dorada</div><div class="rv" id="WR2V">38.2–61.8%</div></div></div>
             <div class="rule fail" id="WR3"><span class="ri">—</span><div><div class="rn">Pivote confluencia</div><div class="rv" id="WR3V">nivel cercano</div></div></div>
             <div class="rule fail" id="WR4"><span class="ri">—</span><div><div class="rn">W1 origin intacto</div><div class="rv" id="WR4V">sin invalidación</div></div></div>
+            <div class="rule fail" id="WR5"><span class="ri">—</span><div><div class="rn">MACD dirección</div><div class="rv" id="WR5V">momentum</div></div></div>
           </div>
           <div class="sig-badge badge-wait" id="WBDG"><span class="di dw"></span>Esperando confluencia...</div>
         </div>
@@ -1210,6 +1214,14 @@ function _renderOvr() {
 // ═══════════════════════════════════════════════════════════════
 //  SIGNAL ENGINE
 // ═══════════════════════════════════════════════════════════════
+function emaC(arr, p) {
+  if (!arr || arr.length < p) return null;
+  const k = 2 / (p + 1);
+  let s = 0; for (let i = 0; i < p; i++) s += arr[i];
+  let v = s / p;
+  for (let i = p; i < arr.length; i++) v = arr[i] * k + v * (1 - k);
+  return v;
+}
 function rSet(id, pass, txt) {
   return safe(() => {
     const el = document.getElementById(id), tv = document.getElementById(id+'V');
@@ -1257,24 +1269,56 @@ function doScalp(price, pv, fb, fldA, fldB) {
     const r2 = rSet('SR2', iF, iF ? 'zona 38.2–61.8% activa' : 'fuera de zona Fib');
 
     let pvOk = false, pvTxt = 'sin pivote';
-    if (pv) for (const {v,n} of [{v:pv.PP,n:'PP'},{v:pv.R1,n:'R1'},{v:pv.S1,n:'S1'}]) if (Math.abs(price-v)/price < 0.005) { pvOk = true; pvTxt = `${n} (${fp(v)})`; break; }
+    if (pv) for (const {v,n} of [{v:pv.PP,n:'PP'},{v:pv.R1,n:'R1'},{v:pv.S1,n:'S1'}]) if (Math.abs(price-v)/price < 0.003) { pvOk = true; pvTxt = `${n} (${fp(v)})`; break; }
     const r3 = rSet('SR3', pvOk, pvTxt);
 
-    const sc = [r0, r1, iF, pvOk].filter(Boolean).length;
+    // MACD check
+    const cc = CC[curTF];
+    let macdOk = false, macdTxt = 'sin MACD';
+    if (cc && cc.length > 35) {
+      const cl = cc.map(c => c.close);
+      const e12 = emaC(cl, 12), e26 = emaC(cl, 26);
+      if (e12 && e26) {
+        const ml = e12 - e26;
+        macdOk = fldDir ? (fldDir === 'up' && ml > 0) || (fldDir === 'dn' && ml < 0) : false;
+        macdTxt = macdOk ? `MACD ${ml>0?'▲':'▼'}` : 'MACD sin confirmar';
+      }
+    }
+    const r4 = rSet('SR4', macdOk, macdTxt);
+
+    // ADX check
+    let adxOk = false, adxTxt = 'sin ADX';
+    if (cc && cc.length > 30) {
+      const tr = [], pdm = [], mdm = [];
+      for (let i = 1; i < cc.length; i++) {
+        const h=cc[i].high, l=cc[i].low, pc=cc[i-1].close;
+        tr.push(Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)));
+        const up=cc[i].high-cc[i-1].high, dn=cc[i-1].low-cc[i].low;
+        pdm.push(up>dn&&up>0?up:0); mdm.push(dn>up&&dn>0?dn:0);
+      }
+      const sm = a => { let s=a.slice(0,14).reduce((x,y)=>x+y,0); const o=[s]; for(let i=14;i<a.length;i++){s=s-s/14+a[i];o.push(s);} return o; };
+      const sTR=sm(tr), sP=sm(pdm), sM=sm(mdm);
+      let dxArr=[];
+      for(let i=0;i<sTR.length;i++){if(!sTR[i]){dxArr.push(0);continue;}const p2=sP[i]/sTR[i]*100,m2=sM[i]/sTR[i]*100;dxArr.push(Math.abs(p2-m2)/(p2+m2)*100);}
+      if(dxArr.length>=14){let adx=dxArr.slice(0,14).reduce((a,b)=>a+b,0)/14;for(let i=14;i<dxArr.length;i++)adx=(adx*13+dxArr[i])/14;adxOk=adx>25;adxTxt=adxOk?`ADX ${adx.toFixed(1)} ▲`:`ADX ${adx.toFixed(1)} — lateral`;}
+    }
+    const r5 = rSet('SR5', adxOk, adxTxt);
+
+    const sc = [r0, r1, iF, pvOk, macdOk, adxOk].filter(Boolean).length;
     safe(() => {
       document.getElementById('SNS').textContent = sc;
-      for (let i = 0; i < 4; i++) document.getElementById('SD'+i).className = `sdot${i<sc?' ls':''}`;
+      for (let i = 0; i < 6; i++) document.getElementById('SD'+i).className = `sdot${i<sc?' ls':''}`;
     });
 
     const dir = htfDir || fldB, badge = document.getElementById('SBDG');
-    if (sc >= 3 && dir) {
+    if (sc >= 4 && dir) {
       const up = dir === 'up';
       badge.className = `sig-badge ${up?'badge-long':'badge-short'}`;
-      badge.innerHTML = `<span class="di ${up?'dl':'ds'}"></span>${sc}/4 — SEÑAL ${up?'LONG ▲':'SHORT ▼'}`;
+      badge.innerHTML = `<span class="di ${up?'dl':'ds'}"></span>${sc}/6 — SEÑAL ${up?'LONG ▲':'SHORT ▼'}`;
       if (fb) setEntry(up?fb.r618:fb.r382, up?fb.L:fb.H, up?fb.r382:fb.r618, up?fb.r236:fb.r786, up?'LONG':'SHORT');
     } else {
       badge.className = 'sig-badge badge-wait';
-      badge.innerHTML = `<span class="di dw"></span>${sc}/4 — esperando confluencia`;
+      badge.innerHTML = `<span class="di dw"></span>${sc}/6 — esperando confluencia`;
     }
 
     const fc = (p, eid, esub) => {
@@ -1323,28 +1367,42 @@ function doSwing(price, pv, fb, fldA, fldB) {
     const r2 = rSet('WR2', iF, iF ? 'zona 38.2–61.8% activa' : 'fuera de zona dorada');
 
     let pvOk = false, pvTxt = 'sin pivote';
-    if (pv) for (const {v,n} of [{v:pv.PP,n:'PP'},{v:pv.R1,n:'R1'},{v:pv.S1,n:'S1'},{v:pv.R2,n:'R2'},{v:pv.S2,n:'S2'}]) if (Math.abs(price-v)/price < 0.008) { pvOk = true; pvTxt = `${n} (${fp(v)})`; break; }
+    if (pv) for (const {v,n} of [{v:pv.PP,n:'PP'},{v:pv.R1,n:'R1'},{v:pv.S1,n:'S1'},{v:pv.R2,n:'R2'},{v:pv.S2,n:'S2'}]) if (Math.abs(price-v)/price < 0.005) { pvOk = true; pvTxt = `${n} (${fp(v)})`; break; }
     const r3 = rSet('WR3', pvOk, pvTxt);
 
     const cp = pats[curTF]; let w1ok = true, w1txt = 'sin patrón';
     if (cp) { w1ok = cp.dir === 'up' ? price > cp.origin : price < cp.origin; w1txt = w1ok ? `W1 intacto (${fp(cp.origin)})` : '⚠ W1 violado'; }
     const r4 = rSet('WR4', w1ok, w1txt);
 
-    const sc = [r0, r1, iF, pvOk, w1ok].filter(Boolean).length;
+    // MACD check
+    const cc = CC[curTF];
+    let macdOk = false, macdTxt = 'sin MACD';
+    if (cc && cc.length > 35) {
+      const cl = cc.map(c => c.close);
+      const e12 = emaC(cl, 12), e26 = emaC(cl, 26);
+      if (e12 && e26) {
+        const ml = e12 - e26;
+        macdOk = mDir ? (mDir === 'up' && ml > 0) || (mDir === 'dn' && ml < 0) : false;
+        macdTxt = macdOk ? `MACD ${ml>0?'▲':'▼'}` : 'MACD sin confirmar';
+      }
+    }
+    const r5 = rSet('WR5', macdOk, macdTxt);
+
+    const sc = [r0, r1, iF, pvOk, w1ok, macdOk].filter(Boolean).length;
     safe(() => {
       document.getElementById('SNW').textContent = sc;
-      for (let i = 0; i < 5; i++) document.getElementById('WD'+i).className = `sdot${i<sc?' lw':''}`;
+      for (let i = 0; i < 6; i++) document.getElementById('WD'+i).className = `sdot${i<sc?' lw':''}`;
     });
 
     const badge = document.getElementById('WBDG');
     if (sc >= 4) {
       const up = mDir === 'up';
       badge.className = `sig-badge ${up?'badge-long':'badge-short'}`;
-      badge.innerHTML = `<span class="di ${up?'dl':'ds'}"></span>${sc}/5 — SEÑAL ${up?'LONG ▲':'SHORT ▼'}`;
+      badge.innerHTML = `<span class="di ${up?'dl':'ds'}"></span>${sc}/6 — SEÑAL ${up?'LONG ▲':'SHORT ▼'}`;
       if (fb) setEntry(up?fb.r618:fb.r382, up?fb.L:fb.H, up?fb.r382:fb.r618, up?fb.r236:fb.r786, up?'LONG':'SHORT');
     } else {
       badge.className = 'sig-badge badge-wait';
-      badge.innerHTML = `<span class="di dw"></span>${sc}/5 — esperando confluencia`;
+      badge.innerHTML = `<span class="di dw"></span>${sc}/6 — esperando confluencia`;
     }
 
     tfs.forEach(tf => {

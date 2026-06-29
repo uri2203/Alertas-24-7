@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
-//  engine/signals.js  —  Trading Dashboard PRO v7
-//  Score de 8 condiciones + divergencia RSI como bonus
+//  engine/signals.js  —  Trading Dashboard PRO v7.1
+//  Score ponderado + ATR + Fibonacci bounce + Elliott corrección
 //  Pure math — no I/O, no side effects, fully testable
 // ═══════════════════════════════════════════════════════════════
 
@@ -40,10 +40,41 @@ export function calcRSI(candles, period = 14) {
   return { value: rsi, rising };
 }
 
+// ── RSI DINÁMICO — percentil en ventana ──────────────────────────
+// En vez de fijos 65/35, calcula los percentiles 30/70 de las
+// últimas N velas para adaptarse a la tendencia actual
+export function calcRSIDynamic(candles, period = 14, window = 50) {
+  if (!candles || candles.length < period + window) return null;
+  const rsiValues = [];
+  for (let i = window; i <= candles.length - period; i++) {
+    const r = calcRSI(candles.slice(0, i + period), period);
+    if (r) rsiValues.push(r.value);
+  }
+  if (rsiValues.length < 10) return null;
+  const sorted = [...rsiValues].sort((a, b) => a - b);
+  const p30 = sorted[Math.floor(sorted.length * 0.3)];
+  const p70 = sorted[Math.floor(sorted.length * 0.7)];
+  const current = calcRSI(candles, period);
+  return { value: current?.value, rising: current?.rising, p30, p70 };
+}
+
+// ── ATR (Average True Range) ────────────────────────────────────
+export function calcATR(candles, period = 14) {
+  if (!candles || candles.length < period + 1) return null;
+  const tr = [];
+  for (let i = 1; i < candles.length; i++) {
+    const h = candles[i].high, l = candles[i].low;
+    const pc = candles[i - 1].close;
+    tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  if (tr.length < period) return null;
+  let atr = tr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < tr.length; i++)
+    atr = (atr * (period - 1) + tr[i]) / period;
+  return atr;
+}
+
 // ── DIVERGENCIA RSI ───────────────────────────────────────────────
-// Busca divergencia alcista o bajista en las últimas N velas
-// Alcista: precio hace nuevo mínimo pero RSI no → probable reversión al alza
-// Bajista: precio hace nuevo máximo pero RSI no → probable reversión a la baja
 export function calcRSIDivergence(candles, period = 14, lookback = 30) {
   if (!candles || candles.length < period + lookback + 5) return null;
 
@@ -52,7 +83,6 @@ export function calcRSIDivergence(candles, period = 14, lookback = 30) {
   const lows   = seg.map(c => c.low);
   const highs  = seg.map(c => c.high);
 
-  // Calcular RSI para cada vela del segmento
   const rsiSeries = [];
   for (let i = 0; i < seg.length; i++) {
     const slice = candles.slice(-(lookback - i + period + 2), candles.length - (lookback - i - 1) || undefined);
@@ -61,13 +91,11 @@ export function calcRSIDivergence(candles, period = 14, lookback = 30) {
   }
 
   const last     = seg.length - 1;
-  const prev     = Math.floor(seg.length / 2); // punto de comparación anterior
+  const prev     = Math.floor(seg.length / 2);
 
   if (rsiSeries[last] == null || rsiSeries[prev] == null) return null;
 
-  // Divergencia alcista: precio mínimo más bajo, RSI mínimo más alto
   const bullDiv = lows[last] < lows[prev] && rsiSeries[last] > rsiSeries[prev];
-  // Divergencia bajista: precio máximo más alto, RSI máximo más bajo
   const bearDiv = highs[last] > highs[prev] && rsiSeries[last] < rsiSeries[prev];
 
   if (bullDiv) return 'bullish';
@@ -76,8 +104,6 @@ export function calcRSIDivergence(candles, period = 14, lookback = 30) {
 }
 
 // ── MACD ─────────────────────────────────────────────────────────
-// Retorna { macdLine, signalLine, histogram, dir }
-// dir: 'up' si MACD > signal y histograma creciendo, 'dn' si lo contrario
 export function calcMACD(candles, fast = 12, slow = 26, signal = 9) {
   if (!candles || candles.length < slow + signal + 2) return null;
   const closes     = candles.map(c => c.close);
@@ -97,7 +123,6 @@ export function calcMACD(candles, fast = 12, slow = 26, signal = 9) {
   const histogram  = macdVal - sigVal;
   const prevHist   = macdLine[n - 1] - (signalLine[n - 1] || 0);
 
-  // Dirección: MACD sobre signal line Y histograma creciendo (momentum real)
   const dir = macdVal > sigVal && histogram > prevHist ? 'up'
             : macdVal < sigVal && histogram < prevHist ? 'dn'
             : null;
@@ -105,10 +130,9 @@ export function calcMACD(candles, fast = 12, slow = 26, signal = 9) {
   return { macdVal, sigVal, histogram, dir };
 }
 
-// ── ADX (Average Directional Index) ──────────────────────────────
-// Mide la FUERZA de la tendencia (no su dirección)
-// ADX > 25 = tendencia real → señales confiables
-// ADX < 25 = mercado lateral → señales poco confiables
+// ── ADX con DI+/DI- ─────────────────────────────────────────────
+// Retorna { value, trending, diPlus, diMinus, dir }
+// dir: 'up' si DI+ > DI-, 'dn' si DI- > DI+
 export function calcADX(candles, period = 14) {
   if (!candles || candles.length < period * 2 + 2) return null;
 
@@ -129,7 +153,6 @@ export function calcADX(candles, period = 14) {
     minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
   }
 
-  // Suavizado Wilder
   const smooth = (arr) => {
     let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
     const out = [s];
@@ -144,21 +167,27 @@ export function calcADX(candles, period = 14) {
   const sPDM = smooth(plusDM);
   const sMDM = smooth(minusDM);
 
-  const dx = [];
+  const dx = [], pdiArr = [], mdiArr = [];
   for (let i = 0; i < sTR.length; i++) {
-    if (sTR[i] === 0) { dx.push(0); continue; }
+    if (sTR[i] === 0) { dx.push(0); pdiArr.push(0); mdiArr.push(0); continue; }
     const pdi = (sPDM[i] / sTR[i]) * 100;
     const mdi = (sMDM[i] / sTR[i]) * 100;
+    pdiArr.push(pdi);
+    mdiArr.push(mdi);
     dx.push(Math.abs(pdi - mdi) / (pdi + mdi) * 100);
   }
 
   if (dx.length < period) return null;
-  // Wilder's smoothing for final ADX
   let adx = dx.slice(0, period).reduce((a, b) => a + b, 0) / period;
   for (let i = period; i < dx.length; i++) {
     adx = (adx * (period - 1) + dx[i]) / period;
   }
-  return { value: adx, trending: adx > 25 };
+
+  const lastDIPlus  = pdiArr[pdiArr.length - 1] || 0;
+  const lastDIMinus = mdiArr[mdiArr.length - 1] || 0;
+  const diDir = lastDIPlus > lastDIMinus ? 'up' : lastDIMinus > lastDIPlus ? 'dn' : null;
+
+  return { value: adx, trending: adx > 25, diPlus: lastDIPlus, diMinus: lastDIMinus, dir: diDir };
 }
 
 // ── VOLUMEN RELATIVO ─────────────────────────────────────────────
@@ -220,6 +249,40 @@ export function calcFibonacci(candles, lookback = 150) {
   };
 }
 
+// ── FIBONACCI BOUNCE ─────────────────────────────────────────────
+// Detecta si el precio REBOTÓ recientemente en un nivel Fib
+// Retorna { level, direction } o null
+// direction: 'bullish' si rebotó en soporte (subiendo), 'bearish' si rechazó en resistencia (bajando)
+export function detectFibBounce(candles, fib, atr, tolerance) {
+  if (!fib || !atr || !candles || candles.length < 5) return null;
+  const tol = tolerance || atr * 0.3;
+  const levels = [
+    { name: 'r786', val: fib.r786 },
+    { name: 'r618', val: fib.r618 },
+    { name: 'r500', val: fib.r500 },
+    { name: 'r382', val: fib.r382 },
+    { name: 'r236', val: fib.r236 },
+  ];
+  const recent = candles.slice(-10);
+  for (const lv of levels) {
+    const touches = recent.filter(c =>
+      Math.abs(c.low - lv.val) < tol || Math.abs(c.high - lv.val) < tol
+    );
+    if (touches.length === 0) continue;
+    const lastTouch = touches[touches.length - 1];
+    const lastCandle = recent[recent.length - 1];
+    // Bounce alcista: toca nivel por debajo y cierra arriba
+    if (lastCandle.close > lv.val && lastCandle.low <= lv.val + tol) {
+      return { level: lv.name, direction: 'bullish', price: lv.val };
+    }
+    // Rechazo bajista: toca nivel por arriba y cierra abajo
+    if (lastCandle.close < lv.val && lastCandle.high >= lv.val - tol) {
+      return { level: lv.name, direction: 'bearish', price: lv.val };
+    }
+  }
+  return null;
+}
+
 // ── VPOC ─────────────────────────────────────────────────────────
 export function calcVPOC(candles, buckets = 50) {
   if (!candles || candles.length < 10) return null;
@@ -251,7 +314,8 @@ export function detectSwings(candles, lookback) {
   return out.sort((a, b) => a.time - b.time);
 }
 
-// ── ELLIOTT WAVE ─────────────────────────────────────────────────
+// ── ELLIOTT WAVE (CORREGIDO) ─────────────────────────────────────
+// Regla estricta: onda 4 NUNCA sobreponga territorio de onda 1
 export function detectElliott(candles, tf, TF_CONFIG) {
   const lb  = Math.max(3, Math.floor(candles.length / 35));
   const sw  = detectSwings(candles, lb);
@@ -272,6 +336,7 @@ export function detectElliott(candles, tf, TF_CONFIG) {
       const w2r = (w[1].p - w[2].p) / w1; if (w2r < .25 || w2r > .85) continue;
       const w3  = w[3].p - w[2].p; if (w3 < w1 * .70) continue;
       const w4r = (w[3].p - w[4].p) / w3; if (w4r < .15 || w4r > .70) continue;
+      // REGLA CRÍTICA: onda 4 no puede sobreponer onda 1
       if (w[4].p <= w[1].p) continue;
       found.push({ pts: w.slice(0, Math.min(6, w.length)), dir: 'up', w1, w2r, w3ext: w3/w1, w4r, labels: cfg.labels, degree: cfg.degree, origin: w[0].p, tf });
     }
@@ -281,6 +346,7 @@ export function detectElliott(candles, tf, TF_CONFIG) {
       const w2r = (w[2].p - w[1].p) / w1; if (w2r < .25 || w2r > .85) continue;
       const w3  = w[2].p - w[3].p; if (w3 < w1 * .70) continue;
       const w4r = (w[4].p - w[3].p) / w3; if (w4r < .15 || w4r > .70) continue;
+      // REGLA CRÍTICA: onda 4 no puede sobreponer onda 1
       if (w[4].p >= w[1].p) continue;
       found.push({ pts: w.slice(0, 5), dir: 'dn', w1, w2r, w3ext: w3/w1, w4r, labels: cfg.labels, degree: cfg.degree, origin: w[0].p, tf });
     }
@@ -315,19 +381,20 @@ export function scoreTFMayor(candles, tf) {
   return null;
 }
 
-// ── SIGNAL SCORING — 8 condiciones + divergencia bonus ───────────
+// ── SCORE PONDERADO — 8 condiciones + divergencia bonus ──────────
 //
-//  1. FLD Hurst alineado          (TF actual)
-//  2. Zona Fibonacci 38.2–61.8%   (TF actual)
-//  3. Pivote cercano ±0.5%        (TF actual)
-//  4. Elliott detectado           (TF actual)
-//  5. RSI confirmando + Volumen   (TF actual)
-//  6. TF mayor alineado           (TF padre)
-//  7. MACD confirmando dirección  (TF actual) ← NUEVO
-//  8. ADX > 25 — mercado en tend. (TF actual) ← NUEVO
-//  +  Divergencia RSI             (bonus, señal especial)
+//  Ponderaciones:
+//    FLD Hurst (2.0)  — señal principal de dirección
+//    MACD dir  (2.0)  — confirmación de momentum
+//    ADX+DI    (1.5)  — fuerza + dirección de tendencia
+//    RSI+Vol   (1.5)  — confirmación de momentum
+//    Elliott   (1.0)  — patrón de estructura
+//    FibBounce (1.0)  — rebote en nivel clave
+//    Pivot     (1.0)  — proximidad a zona de control
+//    TF Mayor  (1.0)  — alineación multi-timeframe
 //
-//  candidateMayorCandles: candles del TF padre (null para 1d)
+//  Score total: 11.0 puntos
+//  Mínimo para señal: 7.0 normal, 5.5 con divergencia alineada
 // ════════════════════════════════════════════════════════════════
 export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null) {
   if (!candles || candles.length < 60) return null;
@@ -335,10 +402,11 @@ export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null
   const price = candles[candles.length - 1].close;
   const piv   = calcPivots(candles);
   const fib   = calcFibonacci(candles);
+  const atr   = calcATR(candles, 14);
   const vpoc  = calcVPOC(candles.slice(-100));
   const hp    = (TF_CONFIG[tf] || TF_CONFIG['1h']).hurstP;
 
-  // ── 1. FLD Hurst ──────────────────────────────────────────────
+  // ── 1. FLD Hurst (peso: 2.0) ─────────────────────────────────
   const fdA   = calcFLD(candles, hp[0]);
   const fdB   = calcFLD(candles, hp[1]);
   const fldAv = fdA.length ? fdA[fdA.length - 1].value : null;
@@ -349,93 +417,111 @@ export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null
     else if (price < fldAv && price < fldBv) fldDir = 'dn';
   }
 
-  // ── 2. Zona Fibonacci ─────────────────────────────────────────
-  const inFib = fib && price >= fib.r618 && price <= fib.r382;
+  // ── 2. Fibonacci Bounce (peso: 1.0) ──────────────────────────
+  const fibBounce = detectFibBounce(candles, fib, atr);
+  const fibOk     = fibBounce && fldDir && fibBounce.direction === (fldDir === 'up' ? 'bullish' : 'bearish');
 
-  // ── 3. Pivote ±0.5% ──────────────────────────────────────────
+  // ── 3. Pivote ±0.3% (peso: 1.0) — más estricto ──────────────
   let pvOk = false;
   if (piv)
     for (const v of [piv.PP, piv.R1, piv.S1])
-      if (Math.abs(price - v) / price < 0.005) { pvOk = true; break; }
+      if (Math.abs(price - v) / price < 0.003) { pvOk = true; break; }
 
-  // ── 4. Elliott detectado ──────────────────────────────────────
+  // ── 4. Elliott detectado (peso: 1.0) ─────────────────────────
   const waves = detectElliott(candles, tf, TF_CONFIG);
   const w1ok  = waves && waves.length > 0;
 
-  // ── 5. RSI confirmando + Volumen ──────────────────────────────
-  const rsi         = calcRSI(candles, 14);
-  const volOk       = isVolumeAboveAvg(candles, 20);
-  let rsiVolumeOk   = false;
-  if (rsi && fldDir) {
+  // ── 5. RSI dinámico + Volumen (peso: 1.5) ────────────────────
+  const rsiDyn     = calcRSIDynamic(candles, 14, 50);
+  const volOk      = isVolumeAboveAvg(candles, 20);
+  let rsiVolumeOk  = false;
+  if (rsiDyn && rsiDyn.value != null && fldDir) {
     const rsiAligned = fldDir === 'up'
-      ? (rsi.value < 65 && rsi.rising)
-      : (rsi.value > 35 && !rsi.rising);
+      ? (rsiDyn.value < rsiDyn.p70 && rsiDyn.rising)
+      : (rsiDyn.value > rsiDyn.p30 && !rsiDyn.rising);
     rsiVolumeOk = rsiAligned && volOk;
   }
 
-  // ── 6. TF mayor alineado ──────────────────────────────────────
+  // ── 6. TF mayor alineado (peso: 1.0) ─────────────────────────
   let tfMayorOk = false;
-  if (tf === '1d') {
-    // 1d has no parent — require at least 2 aligned conditions from lower TFs
-    tfMayorOk = false; // Always requires parent candle validation
-  } else if (candidateMayorCandles) {
+  if (tf !== '1d' && candidateMayorCandles) {
     const parentTf = TF_PARENT[tf];
     tfMayorOk      = scoreTFMayor(candidateMayorCandles, parentTf) === fldDir;
   }
 
-  // ── 7. MACD confirmando dirección ─────────────────────────────
-  const macd    = calcMACD(candles);
-  const macdOk  = macd && macd.dir === fldDir;
+  // ── 7. MACD confirmando dirección (peso: 2.0) ────────────────
+  const macd   = calcMACD(candles);
+  const macdOk = macd && macd.dir === fldDir;
 
-  // ── 8. ADX > 25 — mercado en tendencia (no lateral) ──────────
-  const adx    = calcADX(candles);
-  const adxOk  = adx && adx.trending;
+  // ── 8. ADX con DI+/DI- (peso: 1.5) ──────────────────────────
+  const adx   = calcADX(candles);
+  const adxOk = adx && adx.trending && adx.dir === fldDir;
 
-  // ── DIVERGENCIA RSI — señal especial bonus ────────────────────
-  const divergence    = calcRSIDivergence(candles, 14, 30);
-  const hasBullDiv    = divergence === 'bullish';
-  const hasBearDiv    = divergence === 'bearish';
-  const divAligned    = (fldDir === 'up' && hasBullDiv) || (fldDir === 'dn' && hasBearDiv);
+  // ── DIVERGENCIA RSI — bonus ───────────────────────────────────
+  const divergence = calcRSIDivergence(candles, 14, 30);
+  const hasBullDiv = divergence === 'bullish';
+  const hasBearDiv = divergence === 'bearish';
+  const divAligned = (fldDir === 'up' && hasBullDiv) || (fldDir === 'dn' && hasBearDiv);
 
-  // ── SCORE FINAL ───────────────────────────────────────────────
+  // ── SCORE FINAL PONDERADO ─────────────────────────────────────
   const rules = {
-    fldDir, inFib, pvOk, w1ok,
+    fldDir, fibOk, pvOk, w1ok,
     rsiVolumeOk, tfMayorOk, macdOk, adxOk,
     divergence: divergence || null,
     nearVPOC: vpoc && Math.abs(price - vpoc) / price < 0.006,
+    atr: atr || null,
+    adx: adx || null,
+    rsiDyn: rsiDyn || null,
   };
 
-  const score = [
-    fldDir !== null,  // 1
-    inFib,            // 2
-    pvOk,             // 3
-    w1ok,             // 4
-    rsiVolumeOk,      // 5
-    tfMayorOk,        // 6
-    macdOk,           // 7
-    adxOk,            // 8
-  ].filter(Boolean).length;
+  const weights = { fld: 2.0, macd: 2.0, adx: 1.5, rsiVol: 1.5, elliott: 1.0, fib: 1.0, pivot: 1.0, tfMayor: 1.0 };
+  const total = Object.values(weights).reduce((a, b) => a + b, 0); // 10.0
 
-  const max = 8;
-  const dir = fldDir;
+  let score = 0;
+  if (fldDir)    score += weights.fld;
+  if (macdOk)    score += weights.macd;
+  if (adxOk)     score += weights.adx;
+  if (rsiVolumeOk) score += weights.rsiVol;
+  if (w1ok)      score += weights.elliott;
+  if (fibOk)     score += weights.fib;
+  if (pvOk)      score += weights.pivot;
+  if (tfMayorOk) score += weights.tfMayor;
 
-  if ((score >= 6 || divAligned) && dir) {
+  const minNormal = 6.5;
+  const minDiv    = 5.0;
+  const dir       = fldDir;
+
+  if ((score >= minNormal || (divAligned && score >= minDiv)) && dir) {
     const isUp = dir === 'up';
+    // SL/TP dinámicos con ATR
+    const atrMult = atr || 0;
+    const rawSL   = isUp ? fib.L : fib.H;
+    const rawTP1  = isUp ? fib.r382 : fib.r618;
+    const rawTP2  = isUp ? fib.r236 : fib.r786;
+    // Ajustar SL: máximo 2x ATR del swing
+    const maxSLDist = atrMult * 2;
+    let sl = rawSL;
+    if (maxSLDist > 0 && Math.abs(price - rawSL) > maxSLDist) {
+      sl = isUp ? price - maxSLDist : price + maxSLDist;
+    }
+
     return {
       signal:    isUp ? 'LONG' : 'SHORT',
-      score, max, dir, price,
+      score: Math.round(score * 10) / 10,
+      max: total, dir, price,
       entry:     isUp ? fib.r618  : fib.r382,
-      sl:        isUp ? fib.L     : fib.H,
-      t1:        isUp ? fib.r382  : fib.r618,
-      t2:        isUp ? fib.r236  : fib.r786,
+      sl,
+      t1:        rawTP1,
+      t2:        rawTP2,
       vpoc, rules,
+      atr: atrMult,
       divergence: divergence || null,
       time: new Date().toISOString(),
     };
   }
 
   return {
-    signal: 'WAIT', score, max, dir, price, vpoc, rules,
+    signal: 'WAIT', score: Math.round(score * 10) / 10, max: total, dir, price, vpoc, rules,
     divergence: divergence || null,
     time: new Date().toISOString(),
   };

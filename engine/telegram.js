@@ -26,7 +26,7 @@ export function buildAlertMessage(sym, tf, sig, isDivergence = false) {
   return `${header}
 
 🕐 <b>Hora MX:</b> ${time}
-📊 <b>Confluencia:</b> ${sig.score}/${sig.max} condiciones
+📊 <b>Score:</b> ${sig.score}/${sig.max} (ponderado)
 ${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${divLine}
 
 💰 <b>Niveles de operación:</b>
@@ -35,18 +35,19 @@ ${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${div
   • Target 1: <code>${fp(sig.t1)}</code>
   • Target 2: <code>${fp(sig.t2)}</code>
   • VPOC:     <code>${fp(sig.vpoc)}</code>
+  • ATR(14):  <code>${fp(sig.atr)}</code>
 
 📋 <b>Condiciones activas:</b>
   ${r.fldDir      ? '✅' : '❌'} Hurst FLD (${r.fldDir || '—'})
-  ${r.inFib       ? '✅' : '❌'} Zona Fibonacci 38.2–61.8%
-  ${r.pvOk        ? '✅' : '❌'} Confluencia Pivote
+  ${r.fibOk       ? '✅' : '❌'} Fibonacci Bounce en nivel clave
+  ${r.pvOk        ? '✅' : '❌'} Confluencia Pivote (±0.3%)
   ${r.w1ok        ? '✅' : '❌'} Onda de Elliott detectada
-  ${r.rsiVolumeOk ? '✅' : '❌'} RSI alineado + Volumen confirmado
+  ${r.rsiVolumeOk ? '✅' : '❌'} RSI dinámico + Volumen confirmado
   ${r.tfMayorOk   ? '✅' : '❌'} Timeframe mayor alineado
   ${r.macdOk      ? '✅' : '❌'} MACD confirmando dirección
-  ${r.adxOk       ? '✅' : '❌'} ADX > 25 (tendencia real, no lateral)
+  ${r.adxOk       ? '✅' : '❌'} ADX+DI en tendencia + dirección correcta
 
-⚠️ <i>Sistema automático. Valida siempre con tu análisis personal.</i>`;
+⚠️ <i>Sistema automático v7.1. Valida siempre con tu análisis personal.</i>`;
 }
 
 export async function sendTelegram(token, chatId, text) {
