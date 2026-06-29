@@ -1,0 +1,345 @@
+// ═══════════════════════════════════════════════════════════════
+//  engine/backtester.js  —  Trading Dashboard PRO v7.2
+//  Backtester automático: descarga datos, simula señales, calcula métricas
+//  Uso: node engine/backtester.js [SYMBOL] [TF] [LOOKBACK]
+//  Ejemplo: node engine/backtester.js BTCUSDT 1h 500
+// ═══════════════════════════════════════════════════════════════
+import { scoreSignal, TF_CONFIG, TF_PARENT } from './signals.js';
+import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── FETCH CANDLES ──────────────────────────────────────────────
+async function fetchCandles(symbol, interval, limit = 500) {
+  const endpoints = [
+    'https://data-api.binance.vision/api/v3/klines',
+    'https://api1.binance.com/api/v3/klines',
+    'https://api2.binance.com/api/v3/klines',
+  ];
+  for (const base of endpoints) {
+    try {
+      const url = `${base}?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 Backtester' } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return data.map(k => ({
+        time: +k[0] / 1000,
+        open: +k[1], high: +k[2], low: +k[3], close: +k[4], vol: +k[5],
+      }));
+    } catch (e) { continue; }
+  }
+  throw new Error('No se pudieron obtener velas de Binance');
+}
+
+// ── FETCH MAYOR CANDLES ────────────────────────────────────────
+async function fetchMayorCandles(symbol, tf) {
+  const parentTf = TF_PARENT[tf];
+  if (!parentTf) return null;
+  try {
+    return await fetchCandles(symbol, parentTf, 200);
+  } catch {
+    return null;
+  }
+}
+
+// ── BACKTEST PRINCIPAL ─────────────────────────────────────────
+async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) {
+  console.log(`\n╔══════════════════════════════════════════════╗`);
+  console.log(`║  BACKTESTER v7.2 — ${symbol} ${tf.padEnd(4)}             ║`);
+  console.log(`║  Velas: ${lookback} | Score≥6.0 | Eval: ${evalHours.join(',')}h      ║`);
+  console.log(`╚══════════════════════════════════════════════╝\n`);
+
+  // Descargar datos
+  console.log(`📥 Descargando ${lookback} velas de ${symbol}/${tf}...`);
+  const allCandles = await fetchCandles(symbol, tf, lookback);
+  console.log(`✅ ${allCandles.length} velas descargadas\n`);
+
+  // Descargar TF mayor
+  console.log(`📥 Descargando TF mayor (${TF_PARENT[tf] || 'N/A'})...`);
+  const mayorCandles = await fetchMayorCandles(symbol, tf);
+  console.log(`✅ TF mayor: ${mayorCandles ? mayorCandles.length + ' velas' : 'no disponible'}\n`);
+
+  const MIN_SCORE = 5.0;  // Umbral para backtesting (producción usa 7.0)
+
+  // Parámetros
+  const WINDOW = 80;       // velas mínimas para scoring
+  const ENTRY_OFFSET = 5;  // entrar N velas después de la señal
+  const SLIPPAGE = 0.001;  // 0.1% slippage
+
+  const trades = [];
+  let openTrade = null;
+
+  // Candles needed for evaluation (based on longest eval period)
+  const maxEvalCandles = Math.max(...evalHours) + 5;
+  const loopEnd = Math.min(allCandles.length - maxEvalCandles, allCandles.length - 1);
+
+  console.log(`🔄 Simulando señales (MIN_SCORE=${MIN_SCORE})...\n`);
+
+  let signalsFound = 0;
+
+  for (let i = WINDOW; i < loopEnd; i++) {
+    try {
+    // Si hay trade abierto, evaluar
+    if (openTrade) {
+      const currentCandle = allCandles[i];
+      const entryTime = openTrade.entryTime;
+      const hoursElapsed = (currentCandle.time - entryTime) / 3600;
+
+      // Evaluar SL/TP en cada vela
+      if (openTrade.signal === 'LONG') {
+        if (currentCandle.low <= openTrade.sl) {
+          openTrade.result = 'LOSS';
+          openTrade.exitPrice = openTrade.sl;
+          openTrade.exitTime = currentCandle.time;
+          trades.push(openTrade);
+          openTrade = null;
+          continue;
+        }
+        if (currentCandle.high >= openTrade.t1) {
+          openTrade.result = 'WIN';
+          openTrade.exitPrice = openTrade.t1;
+          openTrade.exitTime = currentCandle.time;
+          trades.push(openTrade);
+          openTrade = null;
+          continue;
+        }
+      } else {
+        if (currentCandle.high >= openTrade.sl) {
+          openTrade.result = 'LOSS';
+          openTrade.exitPrice = openTrade.sl;
+          openTrade.exitTime = currentCandle.time;
+          trades.push(openTrade);
+          openTrade = null;
+          continue;
+        }
+        if (currentCandle.low <= openTrade.t1) {
+          openTrade.result = 'WIN';
+          openTrade.exitPrice = openTrade.t1;
+          openTrade.exitTime = currentCandle.time;
+          trades.push(openTrade);
+          openTrade = null;
+          continue;
+        }
+      }
+
+      // Si lleva más de 48h, cerrar
+      if (hoursElapsed > 48) {
+        openTrade.exitPrice = currentCandle.close;
+        openTrade.exitTime = currentCandle.time;
+        const pnl = openTrade.signal === 'LONG'
+          ? (currentCandle.close - openTrade.entryPrice) / openTrade.entryPrice
+          : (openTrade.entryPrice - currentCandle.close) / openTrade.entryPrice;
+        openTrade.pnl = pnl;
+        openTrade.result = pnl > 0 ? 'WIN' : 'LOSS';
+        trades.push(openTrade);
+        openTrade = null;
+        continue;
+      }
+    }
+
+    // Si no hay trade abierto, buscar señal
+    if (!openTrade) {
+      const window = allCandles.slice(0, i + 1);
+      const mayorWindow = mayorCandles
+        ? mayorCandles.slice(0, Math.floor(i * (mayorCandles.length / allCandles.length)) + 1)
+        : null;
+
+      const sig = scoreSignal(window, tf, TF_CONFIG, mayorWindow);
+
+      if (sig && sig.signal !== 'WAIT' && sig.score >= MIN_SCORE) {
+        signalsFound++;
+        const entryCandle = allCandles[i + ENTRY_OFFSET] || allCandles[i];
+        if (!entryCandle) continue;
+
+        const entryPrice = entryCandle.open * (1 + (sig.signal === 'LONG' ? SLIPPAGE : -SLIPPAGE));
+        const atr = sig.atr || (sig.rules?.atr) || 0;
+
+        let sl, t1;
+        if (sig.signal === 'LONG') {
+          sl = sig.sl || (entryPrice - atr * 2);
+          t1 = sig.t1 || (entryPrice + atr * 2);
+        } else {
+          sl = sig.sl || (entryPrice + atr * 2);
+          t1 = sig.t1 || (entryPrice - atr * 2);
+        }
+
+        openTrade = {
+          sym: symbol, tf,
+          signal: sig.signal,
+          score: sig.score,
+          entryPrice, sl, t1,
+          entryTime: entryCandle.time,
+          atr,
+          divergence: sig.divergence,
+          rules: sig.rules,
+          exitPrice: null, exitTime: null,
+          result: null, pnl: null,
+        };
+      }
+    }
+    } catch (e) { /* skip candle on error */ }
+  }
+
+  // Cerrar trade abierto al final
+  if (openTrade) {
+    openTrade.exitPrice = allCandles[allCandles.length - 1].close;
+    openTrade.exitTime = allCandles[allCandles.length - 1].time;
+    const pnl = openTrade.signal === 'LONG'
+      ? (openTrade.exitPrice - openTrade.entryPrice) / openTrade.entryPrice
+      : (openTrade.entryPrice - openTrade.exitPrice) / openTrade.entryPrice;
+    openTrade.pnl = pnl;
+    openTrade.result = pnl > 0 ? 'WIN' : 'LOSS';
+    trades.push(openTrade);
+  }
+
+  console.log(`\n📊 Señales encontradas: ${signalsFound} | Trades ejecutados: ${trades.length}`);
+  return trades;
+}
+
+// ── CALCULAR MÉTRICAS ──────────────────────────────────────────
+function calcMetrics(trades) {
+  if (!trades.length) return { total: 0, message: 'Sin trades generados' };
+
+  const wins = trades.filter(t => t.result === 'WIN');
+  const losses = trades.filter(t => t.result === 'LOSS');
+  const winRate = Math.round(wins.length / trades.length * 100);
+
+  const avgWin = wins.length ? wins.reduce((a, t) => a + (t.pnl || 0), 0) / wins.length : 0;
+  const avgLoss = losses.length ? Math.abs(losses.reduce((a, t) => a + (t.pnl || 0), 0) / losses.length) : 0;
+  const profitFactor = avgLoss > 0 ? +(avgWin / avgLoss).toFixed(2) : avgWin > 0 ? Infinity : 0;
+
+  // Max drawdown
+  let equity = 100, maxEquity = 100, maxDrawdown = 0;
+  for (const t of trades) {
+    equity *= (1 + (t.pnl || 0));
+    if (equity > maxEquity) maxEquity = equity;
+    const dd = (maxEquity - equity) / maxEquity * 100;
+    if (dd > maxDrawdown) maxDrawdown = dd;
+  }
+
+  // Sharpe ratio (simplificado)
+  const returns = trades.map(t => t.pnl || 0);
+  const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const stdDev = Math.sqrt(returns.reduce((a, r) => a + (r - avgReturn) ** 2, 0) / returns.length);
+  const sharpe = stdDev > 0 ? +(avgReturn / stdDev).toFixed(2) : 0;
+
+  // Por dirección
+  const longs = trades.filter(t => t.signal === 'LONG');
+  const shorts = trades.filter(t => t.signal === 'SHORT');
+  const longWinRate = longs.length ? Math.round(longs.filter(t => t.result === 'WIN').length / longs.length * 100) : 0;
+  const shortWinRate = shorts.length ? Math.round(shorts.filter(t => t.result === 'WIN').length / shorts.length * 100) : 0;
+
+  // Por TF
+  const byTF = {};
+  for (const t of trades) {
+    if (!byTF[t.tf]) byTF[t.tf] = { wins: 0, losses: 0, total: 0, pnl: 0 };
+    byTF[t.tf].total++;
+    byTF[t.tf].pnl += t.pnl || 0;
+    if (t.result === 'WIN') byTF[t.tf].wins++;
+    else byTF[t.tf].losses++;
+  }
+
+  // Por score range
+  const byScore = {};
+  for (const t of trades) {
+    const bucket = t.score >= 9 ? '9-11' : t.score >= 7.5 ? '7.5-9' : '7-7.5';
+    if (!byScore[bucket]) byScore[bucket] = { wins: 0, losses: 0, total: 0, pnl: 0 };
+    byScore[bucket].total++;
+    byScore[bucket].pnl += t.pnl || 0;
+    if (t.result === 'WIN') byScore[bucket].wins++;
+    else byScore[bucket].losses++;
+  }
+
+  return {
+    total: trades.length,
+    winRate,
+    profitFactor,
+    sharpe,
+    maxDrawdown: +maxDrawdown.toFixed(1),
+    totalPnl: +(trades.reduce((a, t) => a + (t.pnl || 0), 0) * 100).toFixed(2),
+    avgWinPct: +(avgWin * 100).toFixed(2),
+    avgLossPct: +(avgLoss * 100).toFixed(2),
+    avgRR: avgLoss > 0 ? +(avgWin / avgLoss).toFixed(2) : 0,
+    byDir: {
+      LONG:  { total: longs.length,  winRate: longWinRate },
+      SHORT: { total: shorts.length, winRate: shortWinRate },
+    },
+    byTF: Object.entries(byTF).map(([tf, d]) => ({
+      tf, total: d.total, winRate: d.total ? Math.round(d.wins / d.total * 100) : 0,
+      pnl: +(d.pnl * 100).toFixed(2),
+    })),
+    byScore: Object.entries(byScore).map(([range, d]) => ({
+      range, total: d.total, winRate: d.total ? Math.round(d.wins / d.total * 100) : 0,
+      pnl: +(d.pnl * 100).toFixed(2),
+    })),
+    trades: trades.slice(-20).map(t => ({
+      sym: t.sym, tf: t.tf, signal: t.signal,
+      score: t.score, entry: +t.entryPrice.toFixed(4),
+      exit: t.exitPrice ? +t.exitPrice.toFixed(4) : null,
+      result: t.result,
+      pnl: t.pnl ? +(t.pnl * 100).toFixed(2) + '%' : null,
+      atr: t.atr ? +t.atr.toFixed(4) : null,
+    })),
+  };
+}
+
+// ── MAIN ───────────────────────────────────────────────────────
+const args = process.argv.slice(2);
+const symbol = args[0] || 'BTCUSDT';
+const tf     = args[1] || '1h';
+const lookback = parseInt(args[2]) || 500;
+
+try {
+  const trades = await runBacktest(symbol, tf, lookback);
+  const metrics = calcMetrics(trades);
+
+  if (!metrics.total) {
+    console.log(`\n⚠️  Sin trades generados. Score mínimo 7.0 no alcanzado en ${lookback} velas.`);
+    console.log(`    Esto puede significar que el score es demasiado estricto o hay poca volatilidad.\n`);
+    process.exit(0);
+  }
+
+  // Guardar resultado
+  const outDir = join(__dirname, '..', 'data');
+  if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+  const outPath = join(outDir, `backtest-${symbol}-${tf}.json`);
+  writeFileSync(outPath, JSON.stringify(metrics, null, 2), 'utf8');
+
+  // Imprimir resumen
+  console.log(`\n${'═'.repeat(50)}`);
+  console.log(`  RESULTADOS — ${symbol} ${tf}`);
+  console.log(`${'═'.repeat(50)}`);
+  console.log(`  Total trades:    ${metrics.total}`);
+  console.log(`  Win rate:        ${metrics.winRate}%`);
+  console.log(`  Profit factor:   ${metrics.profitFactor}`);
+  console.log(`  Sharpe ratio:    ${metrics.sharpe}`);
+  console.log(`  Max drawdown:    ${metrics.maxDrawdown}%`);
+  console.log(`  P&L total:       ${metrics.totalPnl}%`);
+  console.log(`  R:R promedio:    ${metrics.avgRR}`);
+  console.log(`  Win promedio:    ${metrics.avgWinPct}%`);
+  console.log(`  Loss promedio:   ${metrics.avgLossPct}%`);
+  console.log(`${'─'.repeat(50)}`);
+  console.log(`  LONG:  ${metrics.byDir?.LONG?.total || 0} trades, ${metrics.byDir?.LONG?.winRate || 0}% WR`);
+  console.log(`  SHORT: ${metrics.byDir?.SHORT?.total || 0} trades, ${metrics.byDir?.SHORT?.winRate || 0}% WR`);
+  console.log(`${'─'.repeat(50)}`);
+
+  if (metrics.byScore.length) {
+    console.log(`\n  Por Score:`);
+    for (const r of metrics.byScore)
+      console.log(`    ${r.range}: ${r.total} trades, ${r.winRate}% WR, P&L ${r.pnl}%`);
+  }
+
+  console.log(`\n  Últimos 10 trades:`);
+  for (const t of metrics.trades.slice(-10)) {
+    const icon = t.result === 'WIN' ? '✅' : '❌';
+    console.log(`    ${icon} ${t.signal} ${t.sym} ${t.tf} Score=${t.score} Entry=${t.entry} Exit=${t.exit} P&L=${t.pnl}`);
+  }
+
+  console.log(`\n📊 Resultado guardado en: ${outPath}\n`);
+  } catch (e) {
+    console.error(`❌ Error: ${e.message}`);
+    console.error(e.stack);
+    process.exit(1);
+  }

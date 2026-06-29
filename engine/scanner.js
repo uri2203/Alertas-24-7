@@ -109,7 +109,8 @@ async function runCycle(config) {
 
   if (STATE.paused) {
     STATE.session = 'Pausado';
-    console.log(`[SCANNER] ⏸ Pausado manualmente — sin envíos.`);
+    console.log(`[SCANNER] ⏸ Pausado — evaluando resultados pendientes...`);
+    await evaluatePending(fetchCandles).catch(() => {});
     return;
   }
 

@@ -9,7 +9,7 @@
   body { background: #0a0a0f; color: #e2e8f0; font-family: 'Courier New', monospace; min-height: 100vh; padding: 20px; }
   h1 { color: #26a69a; font-size: 18px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 4px; }
   .sub { color: #64748b; font-size: 11px; margin-bottom: 24px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
   .card { background: #12121a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; }
   .card-title { font-size: 9px; text-transform: uppercase; letter-spacing: .08em; color: #64748b; margin-bottom: 8px; }
   .card-val { font-size: 28px; font-weight: bold; }
@@ -37,19 +37,23 @@
   .alert-div { color: #a78bfa; }
   .tip { background: #12121a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px 16px; font-size: 11px; color: #64748b; margin-bottom: 20px; line-height: 1.6; }
   .tip b { color: #94a3b8; }
+  .metric-big { font-size: 16px; font-weight: bold; }
+  .pnl-pos { color: #26a69a; }
+  .pnl-neg { color: #ef5350; }
 </style>
 </head>
 <body>
 
 <h1>📊 Estadísticas de Señales</h1>
-<p class="sub">Trading Dashboard PRO v7 — Tracker de resultados automático</p>
+<p class="sub">Trading Dashboard PRO v7.2 — Tracker automático con backtesting</p>
 
 <button class="refresh" onclick="load()">↺ Actualizar</button>
 
 <div class="tip">
-  <b>¿Cómo funciona?</b> Cada señal enviada a Telegram se registra aquí con su precio de entrada.
-  El sistema verifica automáticamente si el precio fue en la dirección correcta a <b>1h, 4h y 24h</b>.
-  Con suficientes datos (2-3 semanas) podrás ver qué pares, timeframes y condiciones funcionan mejor.
+  <b>¿Cómo funciona?</b> Cada señal enviada a Telegram se registra automáticamente.
+  El sistema evalúa si el precio fue en la dirección correcta a <b>1h, 4h y 24h</b>.
+  El backtester prueba la estrategia contra datos históricos para validar la estrategia.
+  <b>Funciona incluso con señales pausadas</b> — la pausa solo detiene los envíos a Telegram.
 </div>
 
 <div id="CONTENT"><div class="loading">Cargando estadísticas...</div></div>
@@ -85,30 +89,42 @@ async function load() {
     }
 
     const o = data.overall;
+    const m = data.metrics || {};
     el.innerHTML = `
-      <!-- RESUMEN GENERAL -->
+      <!-- MÉTRICAS PRINCIPALES -->
       <div class="grid">
         <div class="card">
           <div class="card-title">Total señales</div>
           <div class="card-val neu">${data.total}</div>
-          <div class="card-sub">${data.pending} pendientes de evaluar</div>
+          <div class="card-sub">${data.evaluated || 0} evaluadas · ${data.pending} pendientes</div>
         </div>
         <div class="card">
-          <div class="card-title">Acierto a 1h</div>
+          <div class="card-title">Win Rate (24h)</div>
+          <div class="card-val ${pctColor(m.winRate24h)}">${pct(m.winRate24h)}</div>
+          <div class="card-sub">${m.totalWins || 0} WIN / ${m.totalLosses || 0} LOSS</div>
+          <div class="bar-wrap"><div class="bar-fill" style="width:${m.winRate24h || 0}%"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Profit Factor</div>
+          <div class="card-val ${m.profitFactor >= 1.5 ? 'win' : m.profitFactor >= 1 ? 'neu' : 'loss'}">${m.profitFactor || '—'}</div>
+          <div class="card-sub">${m.profitFactor >= 2 ? 'Excelente' : m.profitFactor >= 1.5 ? 'Bueno' : m.profitFactor >= 1 ? 'Aceptable' : 'Negativo'}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Acierto 1h</div>
           <div class="card-val ${pctColor(o.h1?.pct)}">${pct(o.h1?.pct)}</div>
-          <div class="card-sub">${o.h1?.wins || 0} WIN / ${o.h1?.total || 0} evaluadas</div>
+          <div class="card-sub">${o.h1?.wins || 0} WIN / ${o.h1?.total || 0}</div>
           <div class="bar-wrap"><div class="bar-fill" style="width:${o.h1?.pct || 0}%"></div></div>
         </div>
         <div class="card">
-          <div class="card-title">Acierto a 4h</div>
+          <div class="card-title">Acierto 4h</div>
           <div class="card-val ${pctColor(o.h4?.pct)}">${pct(o.h4?.pct)}</div>
-          <div class="card-sub">${o.h4?.wins || 0} WIN / ${o.h4?.total || 0} evaluadas</div>
+          <div class="card-sub">${o.h4?.wins || 0} WIN / ${o.h4?.total || 0}</div>
           <div class="bar-wrap"><div class="bar-fill" style="width:${o.h4?.pct || 0}%"></div></div>
         </div>
         <div class="card">
-          <div class="card-title">Acierto a 24h</div>
+          <div class="card-title">Acierto 24h</div>
           <div class="card-val ${pctColor(o.h24?.pct)}">${pct(o.h24?.pct)}</div>
-          <div class="card-sub">${o.h24?.wins || 0} WIN / ${o.h24?.total || 0} evaluadas</div>
+          <div class="card-sub">${o.h24?.wins || 0} WIN / ${o.h24?.total || 0}</div>
           <div class="bar-wrap"><div class="bar-fill" style="width:${o.h24?.pct || 0}%"></div></div>
         </div>
         <div class="card">
@@ -134,6 +150,38 @@ async function load() {
         </div>` : ''}
       </div>
 
+      <!-- POR SESIÓN -->
+      ${data.bySession && data.bySession.length ? `
+      <div class="section">
+        <h2>Rendimiento por Sesión (Horario MX)</h2>
+        <table>
+          <tr><th>Sesión</th><th>Total</th><th>Acierto 1h</th><th>Acierto 4h</th></tr>
+          ${data.bySession.map(r => `
+          <tr>
+            <td><b>${r.name}</b></td>
+            <td>${r.total}</td>
+            <td class="${pctColor(r.h1?.pct)}">${pct(r.h1?.pct)} <span style="color:#64748b">(${r.h1?.wins||0}/${r.h1?.total||0})</span></td>
+            <td class="${pctColor(r.h4?.pct)}">${pct(r.h4?.pct)} <span style="color:#64748b">(${r.h4?.wins||0}/${r.h4?.total||0})</span></td>
+          </tr>`).join('')}
+        </table>
+      </div>` : ''}
+
+      <!-- POR RANGO DE SCORE -->
+      ${data.byScore && data.byScore.length ? `
+      <div class="section">
+        <h2>Rendimiento por Rango de Score</h2>
+        <table>
+          <tr><th>Score</th><th>Total</th><th>Acierto 1h</th><th>Acierto 4h</th></tr>
+          ${data.byScore.map(r => `
+          <tr>
+            <td><b>${r.range}</b></td>
+            <td>${r.total}</td>
+            <td class="${pctColor(r.h1?.pct)}">${pct(r.h1?.pct)} <span style="color:#64748b">(${r.h1?.wins||0}/${r.h1?.total||0})</span></td>
+            <td class="${pctColor(r.h4?.pct)}">${pct(r.h4?.pct)} <span style="color:#64748b">(${r.h4?.wins||0}/${r.h4?.total||0})</span></td>
+          </tr>`).join('')}
+        </table>
+      </div>` : ''}
+
       <!-- POR TIMEFRAME -->
       <div class="section">
         <h2>Rendimiento por Timeframe</h2>
@@ -153,12 +201,13 @@ async function load() {
       <div class="section">
         <h2>Rendimiento por Par (Top 10)</h2>
         <table>
-          <tr><th>Par</th><th>Total</th><th>Acierto 1h</th></tr>
+          <tr><th>Par</th><th>Total</th><th>Acierto 1h</th><th>Acierto 4h</th></tr>
           ${data.byPair.map(r => `
           <tr>
             <td><b>${r.sym}</b></td>
             <td>${r.total}</td>
             <td class="${pctColor(r.h1?.pct)}">${pct(r.h1?.pct)} <span style="color:#64748b">(${r.h1?.wins||0}/${r.h1?.total||0})</span></td>
+            <td class="${pctColor(r.h4?.pct)}">${pct(r.h4?.pct)} <span style="color:#64748b">(${r.h4?.wins||0}/${r.h4?.total||0})</span></td>
           </tr>`).join('')}
         </table>
       </div>
@@ -195,7 +244,7 @@ async function load() {
 }
 
 load();
-setInterval(load, 60000); // auto-refresh cada minuto
+setInterval(load, 60000);
 </script>
 </body>
 </html>

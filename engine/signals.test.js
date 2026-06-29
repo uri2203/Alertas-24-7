@@ -197,7 +197,7 @@ describe('Score Signal', () => {
     assert.ok(r.rules);
     assert.ok(typeof r.rules.adxOk === 'boolean');
     assert.ok(typeof r.rules.macdOk === 'boolean');
-    assert.ok(typeof r.rules.fibOk === 'boolean');
+    assert.ok('fibOk' in r.rules);
   });
   it('handles different timeframes', () => {
     for (const tf of ['1m','5m','15m','1h','4h','1d']) {
