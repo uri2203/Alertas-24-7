@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
-//  server.js  —  Trading Dashboard PRO v7
+//  server.js  —  Trading Dashboard PRO v8.0
 //  Security: server-side sessions, helmet, rate-limit, CORS
+//  + ML + Regime + Risk + Optimizer + Monte Carlo
 // ═══════════════════════════════════════════════════════════════
 import express           from 'express';
 import cors              from 'cors';
@@ -12,13 +13,14 @@ import { fileURLToPath } from 'url';
 import * as dotenv       from 'dotenv';
 dotenv.config();
 
-import { configRouter }   from './routes/config.js';
-import { stateRouter }    from './routes/state.js';
-import { alertsRouter }   from './routes/alerts.js';
-import { trackerRouter }  from './routes/tracker.js';
-import { drawingsRouter } from './routes/drawings.js';
-import { backtestRouter } from './routes/backtest.js';
-import { startScanner }   from './engine/scanner.js';
+import { configRouter }    from './routes/config.js';
+import { stateRouter }     from './routes/state.js';
+import { alertsRouter }    from './routes/alerts.js';
+import { trackerRouter }   from './routes/tracker.js';
+import { drawingsRouter }  from './routes/drawings.js';
+import { backtestRouter }  from './routes/backtest.js';
+import { optimizerRouter } from './routes/optimizer.js';
+import { startScanner }    from './engine/scanner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -121,12 +123,13 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ── PROTECTED ROUTES ──────────────────────────────────────────
-app.use('/api/config',   requireAuth, configRouter(CONFIG));
-app.use('/api/state',    requireAuth, stateRouter());
-app.use('/api/telegram', requireAuth, tgLimiter, alertsRouter(CONFIG));
-app.use('/api/tracker',  requireAuth, trackerRouter());
-app.use('/api/drawings', requireAuth, drawingsRouter());
-app.use('/api/backtest', requireAuth, backtestRouter());
+app.use('/api/config',    requireAuth, configRouter(CONFIG));
+app.use('/api/state',     requireAuth, stateRouter());
+app.use('/api/telegram',  requireAuth, tgLimiter, alertsRouter(CONFIG));
+app.use('/api/tracker',   requireAuth, trackerRouter());
+app.use('/api/drawings',  requireAuth, drawingsRouter());
+app.use('/api/backtest',  requireAuth, backtestRouter());
+app.use('/api/optimizer', requireAuth, optimizerRouter());
 
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
@@ -140,8 +143,9 @@ process.on('uncaughtException',  (e) => console.error('[FATAL] Uncaught Exceptio
 app.listen(CONFIG.port, '0.0.0.0', () => {
   console.log(`
 ╔══════════════════════════════════════════════╗
-║  Trading Dashboard PRO v7                    ║
-║  Modo   : Scanner Autónomo 24/7 ACTIVO       ║
+║  Trading Dashboard PRO v8.0                  ║
+║  Modo   : Scanner Autonomo 24/7 ACTIVO       ║
+║  ML     : Classifier + Regime + Risk         ║
 ║  Puerto : ${CONFIG.port}                            ║
 ║  Auth   : Server-side sessions               ║
 ║  Sec    : Helmet + Rate-Limit + CORS         ║

@@ -84,6 +84,43 @@
   <div class="bt-status" id="BT-STATUS"></div>
 </div>
 
+<!-- OPTIMIZER PANEL -->
+<div class="bt-panel" style="border-color:#8b5cf6">
+  <h3 style="color:#8b5cf6">🧬 Optimizador Genético</h3>
+  <div class="bt-row">
+    <select class="bt-input" id="OPT-SYM" style="width:140px">
+      <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
+      <option>BNBUSDT</option><option>XRPUSDT</option><option>ADAUSDT</option>
+      <option>DOGEUSDT</option>
+    </select>
+    <select class="bt-input" id="OPT-TF" style="width:80px">
+      <option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
+    </select>
+    <input class="bt-input" id="OPT-POP" type="number" value="20" min="10" max="50" placeholder="población">
+    <input class="bt-input" id="OPT-GEN" type="number" value="15" min="5" max="50" placeholder="generaciones">
+    <button class="bt-btn" id="OPT-RUN" onclick="runOptimizer()" style="background:#8b5cf6">▶ Optimizar</button>
+  </div>
+  <div class="bt-status" id="OPT-STATUS"></div>
+</div>
+
+<!-- MONTE CARLO PANEL -->
+<div class="bt-panel" style="border-color:#f59e0b">
+  <h3 style="color:#f59e0b">🎰 Monte Carlo Simulator</h3>
+  <div class="bt-row">
+    <select class="bt-input" id="MC-SYM" style="width:140px">
+      <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
+      <option>BNBUSDT</option><option>XRPUSDT</option><option>ADAUSDT</option>
+      <option>DOGEUSDT</option>
+    </select>
+    <select class="bt-input" id="MC-TF" style="width:80px">
+      <option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
+    </select>
+    <input class="bt-input" id="MC-ITER" type="number" value="10000" min="1000" max="100000" placeholder="iteraciones">
+    <button class="bt-btn" id="MC-RUN" onclick="runMonteCarlo()" style="background:#f59e0b;color:#000">▶ Simular</button>
+  </div>
+  <div class="bt-status" id="MC-STATUS"></div>
+</div>
+
 <div id="CONTENT"><div class="loading">Cargando estadísticas...</div></div>
 <div id="BT-RESULTS"></div>
 
@@ -587,6 +624,82 @@ async function loadBacktestResults() {
   } catch {}
 }
 loadBacktestResults();
+
+// ── OPTIMIZER ─────────────────────────────────────────────────
+async function runOptimizer() {
+  const sym = document.getElementById('OPT-SYM').value;
+  const tf  = document.getElementById('OPT-TF').value;
+  const pop = parseInt(document.getElementById('OPT-POP').value) || 20;
+  const gen = parseInt(document.getElementById('OPT-GEN').value) || 15;
+  const btn = document.getElementById('OPT-RUN');
+  const st  = document.getElementById('OPT-STATUS');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Optimizando...';
+  st.textContent = `Ejecutando algoritmo genético ${sym} ${tf} (pop=${pop}, gen=${gen})... Esto puede tardar 1-5 minutos.`;
+
+  try {
+    const r = await fetch('/api/optimizer/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: sym, tf, popSize: pop, generations: gen }),
+    });
+    const d = await r.json();
+
+    if (!d.ok) {
+      st.textContent = '❌ ' + (d.error || 'Error desconocido');
+    } else {
+      st.innerHTML = `✅ Completado — Fitness: <b>${d.bestFitness}</b> | Mejores parámetros guardados en opt-${sym}-${tf}.json`;
+    }
+  } catch (e) {
+    st.textContent = '❌ Error: ' + e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = '▶ Optimizar';
+}
+
+// ── MONTE CARLO ───────────────────────────────────────────────
+async function runMonteCarlo() {
+  const sym  = document.getElementById('MC-SYM').value;
+  const tf   = document.getElementById('MC-TF').value;
+  const iter = parseInt(document.getElementById('MC-ITER').value) || 10000;
+  const btn  = document.getElementById('MC-RUN');
+  const st   = document.getElementById('MC-STATUS');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Simulando...';
+  st.textContent = `Ejecutando Monte Carlo (${iter.toLocaleString()} iteraciones) para ${sym} ${tf}...`;
+
+  try {
+    const r = await fetch('/api/backtest/monte', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: sym, tf, iterations: iter }),
+    });
+    const d = await r.json();
+
+    if (!d.ok) {
+      st.textContent = '❌ ' + (d.error || 'Error. Ejecuta primero un backtest para este par.');
+    } else {
+      const mc = d.monteCarlo;
+      st.innerHTML = `
+        ✅ <b>Robustez: ${d.robustness}/100</b> |
+        Prob. Loss: ${mc.probabilityOfLoss}% |
+        Prob. Ruin: ${mc.probabilityOfRuin}% |
+        Median: ${mc.medianReturn}% |
+        Worst DD: ${mc.worstDrawdown}% |
+        <span class="pnl-pos">95th: +${mc.percentiles.p95}%</span> |
+        <span class="pnl-neg">5th: ${mc.percentiles.p5}%</span>
+      `;
+    }
+  } catch (e) {
+    st.textContent = '❌ Error: ' + e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = '▶ Simular';
+}
 </script>
 </body>
 </html>
