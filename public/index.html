@@ -483,13 +483,11 @@ tr:hover td{background:var(--bg3)}
 <!-- ═══ TELEGRAM MODAL ══════════════════════ -->
 <div class="ov H" id="TGM"><div class="modal" style="width:340px">
   <div class="m-title">📱 Telegram<button class="m-close" onclick="closeM('TGM')">✕</button></div>
-  <div class="m-field"><span class="m-lbl">Bot Token</span><input class="m-inp" type="password" id="TT" placeholder="123456789:ABC..."/><div class="m-hint">@BotFather → /newbot → copia el token</div></div>
-  <div class="m-field"><span class="m-lbl">Chat ID</span><input class="m-inp" type="text" id="TC" placeholder="123456789"/><div class="m-hint">api.telegram.org/bot&lt;TOKEN&gt;/getUpdates → "chat":{"id": NÚMERO}</div></div>
+  <div class="m-hint" style="margin-bottom:.75rem">Telegram se configura en variables de entorno del servidor (.env). Usa este botón para probar la conexión.</div>
   <div id="TGST" class="m-st"></div>
   <div class="m-btns">
-    <button class="mb mb-g"  onclick="closeM('TGM')">Cancelar</button>
-    <button class="mb mb-gr" onclick="testTG()">🧪 Probar</button>
-    <button class="mb mb-p"  onclick="saveTG()">Guardar</button>
+    <button class="mb mb-g" onclick="closeM('TGM')">Cerrar</button>
+    <button class="mb mb-p" onclick="testTG()">🧪 Probar conexión</button>
   </div>
 </div></div>
 
@@ -605,44 +603,55 @@ function buildSwatches(cid) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  AUTH & INIT (ARQUITECTURA LAZY-MOUNT)
+//  AUTH & INIT — Server-side sessions
 // ═══════════════════════════════════════════════════════════════
-let pwdHash = null;
-async function sha256(msg) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(msg));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+let sessionToken = null;
+
+function authHeaders() {
+  return sessionToken ? { 'X-Session-Token': sessionToken } : {};
 }
 
 async function initAuth() {
   safe(() => buildSwatches('LTH'));
   safe(() => { if (curTheme) document.getElementById('APP').classList.add(curTheme); });
-  
-  try {
-    const r = await fetch('/api/config');
-    const d = await r.json();
-    pwdHash = d.passwordHash;
-  } catch {
-    pwdHash = await sha256('trading2025');
-  }
 
-  if (sessionStorage.getItem('tdp-auth') === '1') {
-    showApp();
-  } else {
-    safe(() => document.getElementById('PI').focus());
+  sessionToken = sessionStorage.getItem('tdp-session');
+
+  if (sessionToken) {
+    try {
+      const r = await fetch('/api/config', { headers: authHeaders() });
+      if (r.ok) { showApp(); return; }
+    } catch {}
+    sessionStorage.removeItem('tdp-session');
+    sessionToken = null;
   }
+  safe(() => document.getElementById('PI').focus());
 }
 
 async function doLogin() {
   const v = safe(() => document.getElementById('PI').value, '');
   if (!v) return;
-  if (await sha256(v) === pwdHash) {
-    sessionStorage.setItem('tdp-auth','1'); showApp();
-  } else {
-    safe(() => {
-      document.getElementById('LE').textContent = 'Contraseña incorrecta';
-      document.getElementById('PI').value = '';
-      document.getElementById('PI').focus();
+
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: v }),
     });
+    const d = await r.json();
+    if (d.ok && d.token) {
+      sessionToken = d.token;
+      sessionStorage.setItem('tdp-session', d.token);
+      showApp();
+    } else {
+      safe(() => {
+        document.getElementById('LE').textContent = d.error || 'Contraseña incorrecta';
+        document.getElementById('PI').value = '';
+        document.getElementById('PI').focus();
+      });
+    }
+  } catch {
+    safe(() => { document.getElementById('LE').textContent = 'Error de conexión'; });
   }
 }
 
@@ -650,17 +659,19 @@ function showApp() {
   safe(() => {
     document.getElementById('LS').classList.add('H');
     buildSwatches('THS');
-    
-    // BLOQUEO ESTRICTO: El dashboard solo se inicializa DESPUÉS de que la 
-    // pantalla de login ha terminado su transición CSS (0.3s) y el DOM está expuesto al 100%.
     if (!window.dashboardInited) {
-        window.dashboardInited = true;
-        setTimeout(() => initDashboard(), 400); 
+      window.dashboardInited = true;
+      setTimeout(() => initDashboard(), 400);
     }
   });
 }
 
-function doLogout() { sessionStorage.removeItem('tdp-auth'); location.reload(); }
+async function doLogout() {
+  try { await fetch('/api/logout', { method: 'POST', headers: authHeaders() }); } catch {}
+  sessionStorage.removeItem('tdp-session');
+  sessionToken = null;
+  location.reload();
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  TF CONFIG
@@ -1469,7 +1480,8 @@ function renderScanResults(signals) {
 
 async function pollServer() {
   await safeAsync(async () => {
-    const r = await fetch('/api/state');
+    const r = await fetch('/api/state', { headers: authHeaders() });
+    if (!r.ok) return;
     const d = await r.json();
     safe(() => {
       document.getElementById('EDOT').className = d.daemonActive ? 'edot on' : 'edot';
@@ -1505,47 +1517,26 @@ async function pollServer() {
 // ═══════════════════════════════════════════════════════════════
 async function sendTG(text) {
   return await safeAsync(async () => {
-    const cfg = JSON.parse(localStorage.getItem('tdp-tg') || '{}');
-    if (!cfg.token || !cfg.chatId) return false;
-    
-    const r = await fetch('/api/telegram', { 
-      method:'POST', 
-      headers:{
-        'Content-Type':'application/json',
-        'Authorization': `Bearer ${pwdHash}`
-      }, 
-      body: JSON.stringify({token:cfg.token, chatId:cfg.chatId, text}) 
+    const r = await fetch('/api/telegram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ text }),
     });
     const d = await r.json(); return d.ok === true;
   }, false);
 }
 
-function saveTG() {
-  safe(() => {
-    const t = document.getElementById('TT').value.trim(), c = document.getElementById('TC').value.trim();
-    if (!t || !c) { showMst('TGST','err','Completa token y Chat ID'); return; }
-    localStorage.setItem('tdp-tg', JSON.stringify({token:t, chatId:c}));
-    document.getElementById('TGBTN').classList.add('ok');
-    closeM('TGM');
-  });
-}
-
 async function testTG() {
   await safeAsync(async () => {
-    const t = document.getElementById('TT').value.trim(), c = document.getElementById('TC').value.trim();
-    if (!t || !c) { showMst('TGST','err','Completa los campos'); return; }
-    showMst('TGST','ok','Enviando...');
-    
-    const r = await fetch('/api/telegram', { 
-      method:'POST', 
-      headers:{
-        'Content-Type':'application/json',
-        'Authorization': `Bearer ${pwdHash}`
-      }, 
-      body: JSON.stringify({token:t, chatId:c, text:`✅ <b>Test OK — Trading Dashboard PRO v6</b>\n🕐 ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}\n\n🌐 Scanner Autónomo configurado.`}) 
+    showMst('TGST', 'ok', 'Enviando...');
+    const text = `✅ <b>Test OK — Trading Dashboard PRO v7</b>\n🕐 ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}\n\n🌐 Scanner Autónomo configurado.`;
+    const r = await fetch('/api/telegram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ text }),
     });
     const d = await r.json();
-    d.ok ? showMst('TGST','ok','✓ Telegram funcionando correctamente') : showMst('TGST','err','Error — verifica token y Chat ID');
+    d.ok ? showMst('TGST','ok','✓ Telegram funcionando correctamente') : showMst('TGST','err','Error — verifica configuración en .env');
   });
 }
 function showMst(id, type, msg) {
@@ -1616,7 +1607,7 @@ function renderJ() {
     document.getElementById('JPNL').textContent = t.length ? `$${tpnl.toFixed(2)}` : '—';
     document.getElementById('JPNL').className = `jv ${tpnl>=0?'jp':'jn'}`;
     document.getElementById('JBST').textContent = t.length ? `$${best.toFixed(2)}` : '—';
-    document.getElementById('JTB').innerHTML = t.map(x => `<tr><td>${x.date}</td><td style="font-weight:700">${x.sym}</td><td class="${x.dir==='LONG'?'up':'dn'}" style="font-weight:700">${x.dir}</td><td>${fp(x.en)}</td><td>${fp(x.ex)}</td><td class="${x.pu>=0?'jp':'jn'}">$${x.pu.toFixed(2)}</td><td class="${x.pp>=0?'jp':'jn'}">${x.pp.toFixed(2)}%</td><td>${x.mod}</td><td style="color:var(--tx2);max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.nts||'—'}</td><td><button class="jdel" onclick="deleteTrade(${x.id})">✕</button></td></tr>`).join('');
+    document.getElementById('JTB').innerHTML = t.map(x => `<tr><td>${x.date}</td><td style="font-weight:700">${x.sym}</td><td class="${x.dir==='LONG'?'up':'dn'}" style="font-weight:700">${x.dir}</td><td>${fp(x.en)}</td><td>${fp(x.ex)}</td><td class="${x.pu>=0?'jp':'jn'}">$${x.pu.toFixed(2)}</td><td class="${x.pp>=0?'jp':'jn'}">${x.pp.toFixed(2)}%</td><td>${x.mod}</td><td style="color:var(--tx2);max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(x.nts||'').replace(/"/g,'&quot;')}">${(x.nts||'—').replace(/</g,'&lt;')}</td><td><button class="jdel" onclick="deleteTrade(${x.id})">✕</button></td></tr>`).join('');
   });
 }
 
@@ -1662,14 +1653,6 @@ async function fullReload() {
     connectWS();
 
     clearInterval(window._mI); window._mI = setInterval(() => loadMacros(curSym), 60000);
-    const cfg = JSON.parse(localStorage.getItem('tdp-tg') || '{}');
-    if (cfg.token) {
-      safe(() => {
-        document.getElementById('TT').value = cfg.token;
-        document.getElementById('TC').value = cfg.chatId || '';
-        document.getElementById('TGBTN').classList.add('ok');
-      });
-    }
   });
 }
 
@@ -1804,11 +1787,11 @@ function initDashboard() {
 }
 async function togglePause() {
   await safeAsync(async () => {
-    const r = await fetch('/api/state');
+    const r = await fetch('/api/state', { headers: authHeaders() });
     const d = await r.json();
     await fetch('/api/state/pause', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ paused: !d.paused })
     });
     await pollServer();

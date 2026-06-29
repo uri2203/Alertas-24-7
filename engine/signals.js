@@ -153,7 +153,11 @@ export function calcADX(candles, period = 14) {
   }
 
   if (dx.length < period) return null;
-  const adx = dx.slice(-period).reduce((a, b) => a + b, 0) / period;
+  // Wilder's smoothing for final ADX
+  let adx = dx.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < dx.length; i++) {
+    adx = (adx * (period - 1) + dx[i]) / period;
+  }
   return { value: adx, trending: adx > 25 };
 }
 
@@ -238,8 +242,8 @@ export function detectSwings(candles, lookback) {
   for (let i = lookback; i < candles.length - lookback; i++) {
     let isH = true, isL = true;
     for (let j = 1; j <= lookback; j++) {
-      if (candles[i-j].high >= candles[i].high || candles[i+j].high >= candles[i].high) isH = false;
-      if (candles[i-j].low  <= candles[i].low  || candles[i+j].low  <= candles[i].low)  isL = false;
+      if (candles[i-j].high > candles[i].high || candles[i+j].high > candles[i].high) isH = false;
+      if (candles[i-j].low  < candles[i].low  || candles[i+j].low  < candles[i].low)  isL = false;
     }
     if (isH) out.push({ time: candles[i].time, p: candles[i].high, t: 'H', idx: i });
     if (isL) out.push({ time: candles[i].time, p: candles[i].low,  t: 'L', idx: i });
@@ -372,7 +376,8 @@ export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null
   // ── 6. TF mayor alineado ──────────────────────────────────────
   let tfMayorOk = false;
   if (tf === '1d') {
-    tfMayorOk = fldDir !== null;
+    // 1d has no parent — require at least 2 aligned conditions from lower TFs
+    tfMayorOk = false; // Always requires parent candle validation
   } else if (candidateMayorCandles) {
     const parentTf = TF_PARENT[tf];
     tfMayorOk      = scoreTFMayor(candidateMayorCandles, parentTf) === fldDir;

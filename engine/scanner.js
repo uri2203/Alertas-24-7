@@ -31,8 +31,11 @@ function getSession() {
   const h      = mxDate.getHours() + mxDate.getMinutes() / 60;
 
   if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 6, minScoreDiv: 5, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 12 && h < 14) return { name: 'Mediodía', minScore: 7, minScoreDiv: 5, cooldownMs: 20 * 60 * 1000 };
   if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 6, minScoreDiv: 5, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 18 && h < 20) return { name: 'atardecer', minScore: 7, minScoreDiv: 5, cooldownMs: 20 * 60 * 1000 };
   if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 7, minScoreDiv: 5, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 0  && h < 8)  return { name: 'Madrugada', minScore: 7, minScoreDiv: 6, cooldownMs: 20 * 60 * 1000 };
   return null;
 }
 
