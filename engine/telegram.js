@@ -20,7 +20,9 @@ export function buildAlertMessage(sym, tf, sig, isDivergence = false) {
     : `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>`;
 
   const divLine = sig.divergence
-    ? `\n📐 <b>Divergencia:</b> ${sig.divergence === 'bullish' ? '🟢 Alcista (precio nuevo mín, RSI no)' : '🔴 Bajista (precio nuevo máx, RSI no)'}`
+    ? sig.divValid
+      ? `\n📐 <b>Divergencia VALIDADA:</b> ${sig.divergence === 'bullish' ? '🟢 Alcista (MACD+ADX confirman)' : '🔴 Bajista (MACD+ADX confirman)'}`
+      : `\n⚠️ <b>Divergencia detectada pero SIN confirmación:</b> ${sig.divergence === 'bullish' ? '🟢 Alcista' : '🔴 Bajista'} (requiere MACD+ADX)`
     : '';
 
   return `${header}
@@ -47,7 +49,7 @@ ${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${div
   ${r.macdOk      ? '✅' : '❌'} MACD confirmando dirección
   ${r.adxOk       ? '✅' : '❌'} ADX+DI en tendencia + dirección correcta
 
-⚠️ <i>Sistema automático v7.1. Valida siempre con tu análisis personal.</i>`;
+⚠️ <i>Sistema automático v7.2. Divergencia requiere MACD+ADX. Valida siempre con tu análisis.</i>`;
 }
 
 export async function sendTelegram(token, chatId, text) {

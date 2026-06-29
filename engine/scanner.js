@@ -40,13 +40,14 @@ function getSession() {
   const mxDate = new Date(mxStr);
   const h      = mxDate.getHours() + mxDate.getMinutes() / 60;
 
-  // Score ponderado: total = 11.0, mínimo 7.0 para señal, 5.5 con divergencia
-  if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 7.0, minScoreDiv: 5.5, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 12 && h < 14) return { name: 'Mediodía', minScore: 7.5, minScoreDiv: 6.0, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 7.0, minScoreDiv: 5.5, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 18 && h < 20) return { name: 'atardecer', minScore: 7.5, minScoreDiv: 6.0, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 7.5, minScoreDiv: 6.0, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 0  && h < 8)  return { name: 'Madrugada', minScore: 8.0, minScoreDiv: 6.5, cooldownMs: 20 * 60 * 1000 };
+  // Score ponderado: total = 11.0, mínimo 7.0 para TODA señal
+  // La divergencia ya NO reduce el mínimo (requiere MACD+ADX confirmados)
+  if (h >= 8  && h < 12) return { name: 'Mañana', minScore: 7.0, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 12 && h < 14) return { name: 'Mediodía', minScore: 7.5, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 7.0, cooldownMs: 15 * 60 * 1000 };
+  if (h >= 18 && h < 20) return { name: 'atardecer', minScore: 7.5, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 7.5, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 0  && h < 8)  return { name: 'Madrugada', minScore: 8.0, cooldownMs: 20 * 60 * 1000 };
   return null;
 }
 
@@ -143,14 +144,8 @@ async function runCycle(config) {
         const sig = scoreSignal(candles, tf, TF_CONFIG, mayorCandles);
         if (!sig || sig.signal === 'WAIT') continue;
 
-        const divAligned = sig.divergence &&
-          ((sig.dir === 'up' && sig.divergence === 'bullish') ||
-           (sig.dir === 'dn' && sig.divergence === 'bearish'));
-
-        const passNormal = sig.score >= session.minScore;
-        const passDiv    = divAligned && sig.score >= session.minScoreDiv;
-
-        if (!passNormal && !passDiv) continue;
+        // El score mínimo ya incluye la lógica de divergencia (requiere MACD+ADX)
+        if (sig.score < session.minScore) continue;
 
         // Filtro anti-contradicción
         if (isContradicted(sym, sig.dir)) {
@@ -178,7 +173,7 @@ async function runCycle(config) {
         sentThisCycle.set(groupKey, { dir: sig.dir, score: sig.score, sym, tf });
 
         activeThisCycle.add(key);
-        const isDivergence = passDiv && !passNormal;
+        const isDivergence = sig.divValid && sig.divergence;
         STATE.signals[key] = { sym, tf, ...sig, isDivergence };
 
         const now = Date.now();

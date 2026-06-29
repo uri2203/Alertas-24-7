@@ -457,17 +457,23 @@ export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null
   const adx   = calcADX(candles);
   const adxOk = adx && adx.trending && adx.dir === fldDir;
 
-  // ── DIVERGENCIA RSI — bonus ───────────────────────────────────
+  // ── DIVERGENCIA RSI — bonus SOLO con confirmación fuerte ────────
+  // La divergencia es señal contrarian. Para que sea válida necesita:
+  //   1. MACD confirmando dirección (momentum real)
+  //   2. ADX confirmando tendencia + dirección (fuerza real)
+  // Sin esto, la divergencia es ruido.
   const divergence = calcRSIDivergence(candles, 14, 30);
   const hasBullDiv = divergence === 'bullish';
   const hasBearDiv = divergence === 'bearish';
   const divAligned = (fldDir === 'up' && hasBullDiv) || (fldDir === 'dn' && hasBearDiv);
+  const divValid   = divAligned && macdOk && adxOk;
 
   // ── SCORE FINAL PONDERADO ─────────────────────────────────────
   const rules = {
     fldDir, fibOk, pvOk, w1ok,
     rsiVolumeOk, tfMayorOk, macdOk, adxOk,
     divergence: divergence || null,
+    divValid,
     nearVPOC: vpoc && Math.abs(price - vpoc) / price < 0.006,
     atr: atr || null,
     adx: adx || null,
@@ -475,7 +481,7 @@ export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null
   };
 
   const weights = { fld: 2.0, macd: 2.0, adx: 1.5, rsiVol: 1.5, elliott: 1.0, fib: 1.0, pivot: 1.0, tfMayor: 1.0 };
-  const total = Object.values(weights).reduce((a, b) => a + b, 0); // 10.0
+  const total = Object.values(weights).reduce((a, b) => a + b, 0);
 
   let score = 0;
   if (fldDir)    score += weights.fld;
@@ -487,11 +493,13 @@ export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null
   if (pvOk)      score += weights.pivot;
   if (tfMayorOk) score += weights.tfMayor;
 
-  const minNormal = 6.5;
-  const minDiv    = 5.0;
+  const minNormal = 7.0;
   const dir       = fldDir;
 
-  if ((score >= minNormal || (divAligned && score >= minDiv)) && dir) {
+  // Señal normal: score >= 7.0/11
+  // Señal con divergencia: score >= 7.0/11 + MACD confirmado + ADX confirmado
+  // La divergencia NO reduce el mínimo — solo agrega validación extra
+  if (score >= minNormal && dir) {
     const isUp = dir === 'up';
     // SL/TP dinámicos con ATR
     const atrMult = atr || 0;
