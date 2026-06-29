@@ -300,48 +300,200 @@ async function runBacktest() {
       st.textContent = '❌ ' + (d.error || 'Error desconocido');
       res.innerHTML = '';
     } else {
-      st.textContent = `✅ Completado: ${d.total} trades en ${sym} ${tf}`;
+      st.textContent = `✅ Completado: ${d.metrics?.total || d.total} trades en ${sym} ${tf}`;
+      const m = d.metrics || d;
+      const mc = d.monteCarlo;
+      const risk = d.riskReport;
+      const robustness = d.robustness;
       res.innerHTML = `
         <div class="section" style="margin-top:20px">
-          <h2>📊 Resultado Backtest — ${sym} ${tf} (${lb} velas)</h2>
+          <h2>📊 Resultado Backtest v8.0 — ${sym} ${tf} (${lb} velas)</h2>
           <div class="grid">
             <div class="card">
               <div class="card-title">Total Trades</div>
-              <div class="card-val neu">${d.total}</div>
+              <div class="card-val neu">${m.total}</div>
             </div>
             <div class="card">
               <div class="card-title">Win Rate</div>
-              <div class="card-val ${d.winRate >= 60 ? 'win' : d.winRate < 45 ? 'loss' : 'neu'}">${d.winRate}%</div>
-              <div class="bar-wrap"><div class="bar-fill" style="width:${d.winRate}%"></div></div>
+              <div class="card-val ${m.winRate >= 60 ? 'win' : m.winRate < 45 ? 'loss' : 'neu'}">${m.winRate}%</div>
+              <div class="bar-wrap"><div class="bar-fill" style="width:${m.winRate}%"></div></div>
             </div>
             <div class="card">
               <div class="card-title">Profit Factor</div>
-              <div class="card-val ${d.profitFactor >= 1.5 ? 'win' : d.profitFactor >= 1 ? 'neu' : 'loss'}">${d.profitFactor}</div>
+              <div class="card-val ${m.profitFactor >= 1.5 ? 'win' : m.profitFactor >= 1 ? 'neu' : 'loss'}">${m.profitFactor}</div>
             </div>
             <div class="card">
               <div class="card-title">Sharpe Ratio</div>
-              <div class="card-val ${d.sharpe >= 1 ? 'win' : 'neu'}">${d.sharpe}</div>
+              <div class="card-val ${m.sharpe >= 1 ? 'win' : 'neu'}">${m.sharpe}</div>
             </div>
             <div class="card">
               <div class="card-title">Max Drawdown</div>
-              <div class="card-val loss">${d.maxDrawdown}%</div>
+              <div class="card-val loss">${m.maxDrawdown}%</div>
             </div>
             <div class="card">
               <div class="card-title">P&L Total</div>
-              <div class="card-val ${d.totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${d.totalPnl}%</div>
+              <div class="card-val ${m.totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${m.totalPnl}%</div>
             </div>
             <div class="card">
               <div class="card-title">R:R Promedio</div>
-              <div class="card-val ${d.avgRR >= 1.5 ? 'win' : 'neu'}">${d.avgRR}</div>
+              <div class="card-val ${m.avgRR >= 1.5 ? 'win' : 'neu'}">${m.avgRR}</div>
             </div>
             <div class="card">
               <div class="card-title">Win / Loss promedio</div>
               <div class="card-sub">
-                <span class="win">+${d.avgWinPct}%</span> /
-                <span class="loss">-${d.avgLossPct}%</span>
+                <span class="win">+${m.avgWinPct}%</span> /
+                <span class="loss">-${m.avgLossPct}%</span>
               </div>
             </div>
           </div>
+
+          ${m.byDir ? `
+          <div class="section">
+            <h2>Por Dirección</h2>
+            <div class="grid">
+              <div class="card">
+                <div class="card-title">LONG</div>
+                <div class="card-val win" style="font-size:20px">${m.byDir.LONG.total} trades</div>
+                <div class="card-sub">${m.byDir.LONG.winRate}% WR</div>
+              </div>
+              <div class="card">
+                <div class="card-title">SHORT</div>
+                <div class="card-val loss" style="font-size:20px">${m.byDir.SHORT.total} trades</div>
+                <div class="card-sub">${m.byDir.SHORT.winRate}% WR</div>
+              </div>
+            </div>
+          </div>` : ''}
+
+          ${m.byRegime && m.byRegime.length ? `
+          <div class="section">
+            <h2>Por Régimen de Mercado</h2>
+            <table>
+              <tr><th>Régimen</th><th>Trades</th><th>Win Rate</th><th>P&L</th></tr>
+              ${m.byRegime.map(r => `
+              <tr>
+                <td><b>${r.regime}</b></td>
+                <td>${r.total}</td>
+                <td class="${r.winRate >= 60 ? 'win' : r.winRate < 45 ? 'loss' : 'neu'}">${r.winRate}%</td>
+                <td class="${r.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r.pnl}%</td>
+              </tr>`).join('')}
+            </table>
+          </div>` : ''}
+
+          ${m.byExit && m.byExit.length ? `
+          <div class="section">
+            <h2>Por Exit Reason</h2>
+            <table>
+              <tr><th>Razón</th><th>Trades</th><th>Win Rate</th><th>P&L</th></tr>
+              ${m.byExit.map(r => `
+              <tr>
+                <td><b>${r.reason}</b></td>
+                <td>${r.total}</td>
+                <td class="${r.winRate >= 60 ? 'win' : r.winRate < 45 ? 'loss' : 'neu'}">${r.winRate}%</td>
+                <td class="${r.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r.pnl}%</td>
+              </tr>`).join('')}
+            </table>
+          </div>` : ''}
+
+          ${m.mlStats && m.mlStats.totalMLTrades > 0 ? `
+          <div class="section">
+            <h2>ML Classifier Stats</h2>
+            <div class="grid">
+              <div class="card">
+                <div class="card-title">ML Trades</div>
+                <div class="card-val neu">${m.mlStats.totalMLTrades}</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Avg Confidence</div>
+                <div class="card-val ${m.mlStats.avgConfidence >= 60 ? 'win' : 'neu'}">${m.mlStats.avgConfidence}%</div>
+              </div>
+            </div>
+          </div>` : ''}
+
+          ${m.byScore && m.byScore.length ? `
+          <div class="section">
+            <h2>Por Rango de Score</h2>
+            <table>
+              <tr><th>Score</th><th>Trades</th><th>Win Rate</th><th>P&L</th></tr>
+              ${m.byScore.map(r => `
+              <tr>
+                <td><b>${r.range}</b></td>
+                <td>${r.total}</td>
+                <td class="${r.winRate >= 60 ? 'win' : r.winRate < 45 ? 'loss' : 'neu'}">${r.winRate}%</td>
+                <td class="${r.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r.pnl}%</td>
+              </tr>`).join('')}
+            </table>
+          </div>` : ''}
+
+          ${mc ? `
+          <div class="section">
+            <h2>🎰 Monte Carlo (10,000 iteraciones) — Robustez: ${robustness}/100</h2>
+            <div class="grid">
+              <div class="card">
+                <div class="card-title">Prob. Pérdida</div>
+                <div class="card-val ${mc.probabilityOfLoss > 40 ? 'loss' : 'win'}">${mc.probabilityOfLoss}%</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Prob. Ruin (50%+)</div>
+                <div class="card-val ${mc.probabilityOfRuin > 10 ? 'loss' : 'win'}">${mc.probabilityOfRuin}%</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Median Return</div>
+                <div class="card-val ${mc.medianReturn >= 0 ? 'pnl-pos' : 'pnl-neg'}">${mc.medianReturn}%</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Worst Drawdown</div>
+                <div class="card-val loss">${mc.worstDrawdown}%</div>
+              </div>
+            </div>
+            <table style="margin-top:12px">
+              <tr><th>Percentil</th><th>Return</th><th>Equity</th></tr>
+              <tr><td>5th (Worst)</td><td class="pnl-neg">${mc.percentiles.p5}%</td><td>$${mc.equity.p5.toLocaleString()}</td></tr>
+              <tr><td>25th</td><td class="${mc.percentiles.p25 >= 0 ? 'pnl-pos' : 'pnl-neg'}">${mc.percentiles.p25}%</td><td>$${mc.equity.p25.toLocaleString()}</td></tr>
+              <tr><td>50th (Median)</td><td class="${mc.percentiles.p50 >= 0 ? 'pnl-pos' : 'pnl-neg'}">${mc.percentiles.p50}%</td><td>$${mc.equity.p50.toLocaleString()}</td></tr>
+              <tr><td>75th</td><td class="pnl-pos">${mc.percentiles.p75}%</td><td>$${mc.equity.p75.toLocaleString()}</td></tr>
+              <tr><td>95th (Best)</td><td class="pnl-pos">${mc.percentiles.p95}%</td><td>$${mc.equity.p95.toLocaleString()}</td></tr>
+            </table>
+            ${mc.riskOfRuin && mc.riskOfRuin.length ? `
+            <div style="margin-top:12px">
+              <h3 style="font-size:10px;color:#64748b;margin-bottom:8px">Risk of Ruin Curve</h3>
+              ${mc.riskOfRuin.map(r => `
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:10px">
+                  <span style="width:80px;color:#94a3b8">${r.threshold}</span>
+                  <div style="flex:1;background:#1e293b;border-radius:3px;height:8px">
+                    <div style="width:${Math.min(100, r.probability * 100)}%;height:8px;background:${r.probability > 0.3 ? '#ef5350' : '#26a69a'};border-radius:3px"></div>
+                  </div>
+                  <span style="width:40px;text-align:right;color:#94a3b8">${(r.probability * 100).toFixed(1)}%</span>
+                </div>
+              `).join('')}
+            </div>` : ''}
+          </div>` : ''}
+
+          ${risk ? `
+          <div class="section">
+            <h2>📋 Risk Management Report</h2>
+            <div class="grid">
+              <div class="card">
+                <div class="card-title">Kelly Fraction</div>
+                <div class="card-val ${risk.kellyFraction > 5 ? 'win' : 'neu'}">${risk.kellyFraction}%</div>
+                <div class="card-sub">$${risk.kellyDollar} por trade</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Expectancy</div>
+                <div class="card-val ${risk.expectancy > 0 ? 'win' : 'loss'}">${risk.expectancy}%</div>
+                <div class="card-sub">Por trade promedio</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Max Consecutive Losses</div>
+                <div class="card-val loss">${risk.maxConsecutiveLosses}</div>
+                <div class="card-sub">95% confidence</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Final Equity</div>
+                <div class="card-val ${risk.totalReturn >= 0 ? 'pnl-pos' : 'pnl-neg'}">$${risk.finalEquity.toLocaleString()}</div>
+                <div class="card-sub">${risk.totalReturn > 0 ? '+' : ''}${risk.totalReturn}% return</div>
+              </div>
+            </div>
+          </div>` : ''}
 
           ${d.byDir ? `
           <div class="section">
@@ -375,21 +527,24 @@ async function runBacktest() {
             </table>
           </div>` : ''}
 
-          ${d.trades && d.trades.length ? `
+          ${m.trades && m.trades.length ? `
           <div class="section">
-            <h2>Últimos ${d.trades.length} Trades</h2>
+            <h2>Últimos ${m.trades.length} Trades</h2>
             <table>
-              <tr><th>Par</th><th>TF</th><th>Señal</th><th>Score</th><th>Entrada</th><th>Salida</th><th>Resultado</th><th>P&L</th></tr>
-              ${d.trades.map(t => `
+              <tr><th>Par</th><th>TF</th><th>Señal</th><th>Score</th><th>Régimen</th><th>ML</th><th>Entrada</th><th>Salida</th><th>Resultado</th><th>P&L</th><th>Exit</th></tr>
+              ${m.trades.map(t => `
               <tr>
                 <td><b>${t.sym}</b></td>
                 <td>${t.tf}</td>
                 <td><span class="badge ${t.signal==='LONG'?'badge-long':'badge-short'}">${t.signal}</span></td>
                 <td>${t.score}</td>
+                <td style="color:#94a3b8;font-size:10px">${t.regime || '—'}</td>
+                <td style="color:${t.mlConf ? '#26a69a' : '#64748b'};font-size:10px">${t.mlConf || '—'}</td>
                 <td>${fp(t.entry)}</td>
                 <td>${t.exit ? fp(t.exit) : '—'}</td>
                 <td>${badgeResult(t.result)}</td>
                 <td class="${t.pnl && t.pnl.includes('-') ? 'pnl-neg' : 'pnl-pos'}">${t.pnl || '—'}</td>
+                <td style="color:#64748b;font-size:10px">${t.exitReason || '—'}</td>
               </tr>`).join('')}
             </table>
           </div>` : ''}
@@ -412,17 +567,21 @@ async function loadBacktestResults() {
     if (d.ok && d.results && d.results.length) {
       const el = document.getElementById('BT-RESULTS');
       if (el && !el.innerHTML) {
-        el.innerHTML = d.results.map(m => `
+        el.innerHTML = d.results.map(r => {
+          const m = r.metrics || r;
+          const robustness = r.robustness;
+          return `
           <div class="section" style="margin-top:12px">
-            <h2>📊 Backtest guardado — ${m.symbol} ${m.tf}</h2>
+            <h2>📊 Backtest guardado — ${r.symbol} ${r.tf} ${robustness ? `(Robustez: ${robustness}/100)` : ''}</h2>
             <div class="grid">
               <div class="card"><div class="card-title">Trades</div><div class="card-val neu">${m.total}</div></div>
               <div class="card"><div class="card-title">Win Rate</div><div class="card-val ${m.winRate >= 60 ? 'win' : 'neu'}">${m.winRate}%</div></div>
               <div class="card"><div class="card-title">P&L</div><div class="card-val ${m.totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${m.totalPnl}%</div></div>
               <div class="card"><div class="card-title">Profit Factor</div><div class="card-val">${m.profitFactor}</div></div>
+              ${robustness ? `<div class="card"><div class="card-title">Robustez</div><div class="card-val ${robustness >= 70 ? 'win' : robustness >= 40 ? 'neu' : 'loss'}">${robustness}/100</div></div>` : ''}
             </div>
-          </div>
-        `).join('');
+          </div>`;
+        }).join('');
       }
     }
   } catch {}

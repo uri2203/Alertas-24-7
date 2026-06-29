@@ -1,15 +1,19 @@
 // ═══════════════════════════════════════════════════════════════
-//  routes/backtest.js  —  Trading Dashboard PRO v7
-//  API para ejecutar backtests desde el dashboard
-//  POST /api/backtest          → ejecuta backtest (symbol, tf, lookback)
+//  routes/backtest.js  —  Trading Dashboard PRO v8.0
+//  API para ejecutar backtests con ML + Risk + Monte Carlo
+//  POST /api/backtest          → ejecuta backtest completo
 //  GET  /api/backtest          → lista resultados guardados
 //  GET  /api/backtest/:sym/:tf → obtiene resultado específico
+//  POST /api/backtest/monte    → ejecuta Monte Carlo sobre trades existentes
+//  POST /api/backtest/risk     → calcula métricas de riesgo
 // ═══════════════════════════════════════════════════════════════
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { runBacktest, calcMetrics } from '../engine/backtester.js';
+import { monteCarloSimulation, monteCarloReport, robustnessScore } from '../engine/monte.js';
+import { generateRiskReport } from '../engine/risk.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -53,7 +57,7 @@ export function backtestRouter() {
     }
   });
 
-  // ── POST: ejecutar backtest ──────────────────────────────────
+  // ── POST: ejecutar backtest completo v8.0 ────────────────────
   router.post('/', async (req, res) => {
     if (running) return res.json({ ok: false, error: 'Backtest ya en ejecución' });
 
@@ -61,20 +65,78 @@ export function backtestRouter() {
     running = true;
 
     try {
-      console.log(`[BACKTEST] Iniciando ${symbol} ${tf} ${lookback} velas...`);
+      console.log(`[BACKTEST v8.0] Iniciando ${symbol} ${tf} ${lookback} velas...`);
       const trades = await runBacktest(symbol, tf, lookback);
       const metrics = calcMetrics(trades);
 
+      // Monte Carlo
+      console.log(`[BACKTEST v8.0] Ejecutando Monte Carlo...`);
+      const mc = monteCarloSimulation(trades, { iterations: 10000, capital: 10000 });
+      const robustness = robustnessScore(mc);
+
+      // Risk Report
+      const riskReport = generateRiskReport(trades, 10000);
+
+      const fullReport = {
+        metrics,
+        monteCarlo: mc,
+        robustness,
+        riskReport,
+        timestamp: new Date().toISOString(),
+      };
+
       // Guardar resultado
       const outPath = path.join(DATA_DIR, `backtest-${symbol}-${tf}.json`);
-      fs.writeFileSync(outPath, JSON.stringify(metrics, null, 2), 'utf8');
+      fs.writeFileSync(outPath, JSON.stringify(fullReport, null, 2), 'utf8');
 
-      console.log(`[BACKTEST] Completado: ${metrics.total} trades, WR=${metrics.winRate}%`);
+      console.log(`[BACKTEST v8.0] Completado: ${metrics.total} trades, WR=${metrics.winRate}%, Robustez=${robustness}/100`);
       running = false;
-      res.json({ ok: true, ...metrics });
+      res.json({ ok: true, ...fullReport });
     } catch (e) {
       running = false;
-      console.error('[BACKTEST] Error:', e.message);
+      console.error('[BACKTEST v8.0] Error:', e.message);
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── POST: Monte Carlo sobre trades existentes ────────────────
+  router.post('/monte', (req, res) => {
+    try {
+      const { symbol = 'BTCUSDT', tf = '1h', iterations = 10000, capital = 10000 } = req.body || {};
+
+      // Cargar trades del backtest guardado
+      const fp = path.join(DATA_DIR, `backtest-${symbol}-${tf}.json`);
+      if (!fs.existsSync(fp)) return res.json({ ok: false, error: 'No hay backtest para este par. Ejecuta primero.' });
+
+      const data = JSON.parse(fs.readFileSync(fp, 'utf8'));
+      const trades = data.metrics?.trades || data.trades || [];
+      if (!trades.length) return res.json({ ok: false, error: 'No hay trades para simular' });
+
+      const mc = monteCarloSimulation(trades, { iterations, capital });
+      const robustness = robustnessScore(mc);
+      const report = monteCarloReport(mc);
+
+      res.json({ ok: true, monteCarlo: mc, robustness, report });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── POST: Risk Report sobre trades existentes ────────────────
+  router.post('/risk', (req, res) => {
+    try {
+      const { symbol = 'BTCUSDT', tf = '1h', capital = 10000 } = req.body || {};
+
+      const fp = path.join(DATA_DIR, `backtest-${symbol}-${tf}.json`);
+      if (!fs.existsSync(fp)) return res.json({ ok: false, error: 'No hay backtest para este par' });
+
+      const data = JSON.parse(fs.readFileSync(fp, 'utf8'));
+      const trades = data.metrics?.trades || data.trades || [];
+      if (!trades.length) return res.json({ ok: false, error: 'No hay trades para analizar' });
+
+      const riskReport = generateRiskReport(trades, capital);
+      res.json({ ok: true, riskReport });
+    } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
   });

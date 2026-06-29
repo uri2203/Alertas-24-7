@@ -253,3 +253,186 @@ describe('Score Signal', () => {
     assert.ok(r.score < 10);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════
+//  TESTS FOR NEW v8.0 MODULES
+// ══════════════════════════════════════════════════════════════════
+
+import { kellyFraction, calcPositionSize, checkMaxDrawdown, calcExpectancy, maxConsecutiveLosses, generateRiskReport } from './risk.js';
+import { detectRegimeADX, detectRegimeVolatility, detectRegimeTrend, detectRegime, regimeScoreAdjustment } from './regime.js';
+import { LogisticClassifier, extractFeatures, FEATURE_NAMES } from './ml.js';
+import { monteCarloSimulation, robustnessScore } from './monte.js';
+
+// ── RISK MODULE ──────────────────────────────────────────────────
+describe('Risk Management', () => {
+  it('kellyFraction returns 0 for invalid inputs', () => {
+    assert.equal(kellyFraction(0, 0.02, 0.01), 0);
+    assert.equal(kellyFraction(0.5, 0, 0.01), 0);
+  });
+
+  it('kellyFraction calculates positive fraction for profitable strategy', () => {
+    const k = kellyFraction(0.6, 0.02, 0.01);
+    assert.ok(k > 0);
+    assert.ok(k < 0.1); // Fractional Kelly should be small
+  });
+
+  it('calcPositionSize returns valid structure', () => {
+    const pos = calcPositionSize(10000, 0.02, 0.7, 'trending');
+    assert.ok(pos.riskPct >= 0.005);
+    assert.ok(pos.riskPct <= 0.05);
+    assert.ok(pos.riskAmount > 0);
+  });
+
+  it('checkMaxDrawdown detects breach', () => {
+    const ok = checkMaxDrawdown(9500, 10000, 0.15);
+    assert.equal(ok.breached, false);
+    const bad = checkMaxDrawdown(8000, 10000, 0.15);
+    assert.equal(bad.breached, true);
+  });
+
+  it('calcExpectancy returns positive for profitable strategy', () => {
+    const e = calcExpectancy(0.6, 0.02, 0.01);
+    assert.ok(e > 0);
+  });
+
+  it('maxConsecutiveLosses returns reasonable estimate', () => {
+    const trades = Array.from({ length: 50 }, (_, i) => ({
+      result: i % 3 === 0 ? 'LOSS' : 'WIN'
+    }));
+    const mcl = maxConsecutiveLosses(trades, 0.95);
+    assert.ok(mcl > 0);
+    assert.ok(mcl < 50);
+  });
+
+  it('generateRiskReport returns complete report', () => {
+    const trades = [
+      { result: 'WIN', pnl: 0.02 },
+      { result: 'LOSS', pnl: -0.01 },
+      { result: 'WIN', pnl: 0.03 },
+      { result: 'LOSS', pnl: -0.01 },
+      { result: 'WIN', pnl: 0.015 },
+    ];
+    const report = generateRiskReport(trades, 10000);
+    assert.ok(report);
+    assert.equal(report.totalTrades, 5);
+    assert.ok(report.winRate > 0);
+    assert.ok(report.kellyFraction >= 0);
+    assert.ok(report.maxDrawdown >= 0);
+  });
+});
+
+// ── REGIME MODULE ─────────────────────────────────────────────────
+describe('Regime Detection', () => {
+  it('detectRegimeADX returns null for insufficient data', () => {
+    assert.equal(detectRegimeADX(genCandles(10)), null);
+  });
+
+  it('detectRegimeADX returns valid regime for sufficient data', () => {
+    const candles = genCandles(100, 100, 0.5); // Strong uptrend
+    const r = detectRegimeADX(candles);
+    assert.ok(r);
+    assert.ok(['trending', 'ranging', 'transitional'].includes(r.regime));
+  });
+
+  it('detectRegimeVolatility returns null for insufficient data', () => {
+    assert.equal(detectRegimeVolatility(genCandles(20)), null);
+  });
+
+  it('detectRegimeTrend returns trend info', () => {
+    const candles = genCandles(120, 100, 0.3);
+    const r = detectRegimeTrend(candles);
+    assert.ok(r);
+    assert.ok(typeof r.slope20 === 'number');
+  });
+
+  it('detectRegime returns composite regime', () => {
+    const candles = genCandles(150, 100, 0.2);
+    const r = detectRegime(candles);
+    assert.ok(r);
+    assert.ok(['trending', 'ranging', 'volatile', 'unknown'].includes(r.regime));
+    assert.ok(typeof r.confidence === 'number');
+  });
+
+  it('regimeScoreAdjustment returns numeric value', () => {
+    const adj = regimeScoreAdjustment({ regime: 'trending', confidence: 0.8 });
+    assert.ok(typeof adj === 'number');
+    assert.ok(adj > 0); // Trending should be positive
+  });
+});
+
+// ── ML MODULE ─────────────────────────────────────────────────────
+describe('ML Classifier', () => {
+  it('LogisticClassifier initializes correctly', () => {
+    const clf = new LogisticClassifier();
+    assert.equal(clf.trained, false);
+    assert.equal(clf.predict({}), 0.5);
+  });
+
+  it('LogisticClassifier trains and predicts', () => {
+    const clf = new LogisticClassifier();
+    const X = Array.from({ length: 50 }, () => {
+      const f = {};
+      FEATURE_NAMES.forEach(n => f[n] = Math.random());
+      return f;
+    });
+    const y = X.map(f => f.rsi > 0.5 ? 1 : 0);
+    clf.train(X, y, 100, 0.1);
+    assert.equal(clf.trained, true);
+    const pred = clf.predict(X[0]);
+    assert.ok(pred >= 0 && pred <= 1);
+  });
+
+  it('LogisticClassifier evaluates accuracy', () => {
+    const clf = new LogisticClassifier();
+    const X = Array.from({ length: 50 }, () => {
+      const f = {};
+      FEATURE_NAMES.forEach(n => f[n] = Math.random());
+      return f;
+    });
+    const y = X.map(f => f.rsi > 0.5 ? 1 : 0);
+    clf.train(X, y, 100, 0.1);
+    const acc = clf.evaluate(X, y);
+    assert.ok(acc >= 0 && acc <= 1);
+  });
+
+  it('extractFeatures returns valid features', () => {
+    const candles = genCandles(150);
+    const features = extractFeatures(candles, '1h');
+    assert.ok(features);
+    assert.ok(typeof features.rsi === 'number');
+    assert.ok(typeof features.macdDir === 'number');
+    assert.ok(typeof features.atrPct === 'number');
+  });
+
+  it('extractFeatures returns null for insufficient data', () => {
+    assert.equal(extractFeatures(genCandles(50), '1h'), null);
+  });
+});
+
+// ── MONTE CARLO MODULE ────────────────────────────────────────────
+describe('Monte Carlo', () => {
+  it('monteCarloSimulation returns null for insufficient trades', () => {
+    assert.equal(monteCarloSimulation([]), null);
+  });
+
+  it('monteCarloSimulation returns valid results', () => {
+    const trades = Array.from({ length: 30 }, (_, i) => ({
+      pnl: (Math.random() - 0.4) * 0.05,
+    }));
+    const mc = monteCarloSimulation(trades, { iterations: 1000, capital: 10000 });
+    assert.ok(mc);
+    assert.equal(mc.iterations, 1000);
+    assert.ok(mc.percentiles);
+    assert.ok(mc.probabilityOfLoss >= 0);
+    assert.ok(mc.worstDrawdown >= 0);
+  });
+
+  it('robustnessScore returns score 0-100', () => {
+    const trades = Array.from({ length: 30 }, () => ({
+      pnl: (Math.random() - 0.3) * 0.05,
+    }));
+    const mc = monteCarloSimulation(trades, { iterations: 500 });
+    const score = robustnessScore(mc);
+    assert.ok(score >= 0 && score <= 100);
+  });
+});
