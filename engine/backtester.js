@@ -61,10 +61,10 @@ export async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) 
   const mayorCandles = await fetchMayorCandles(symbol, tf);
   console.log(`✅ TF mayor: ${mayorCandles ? mayorCandles.length + ' velas' : 'no disponible'}\n`);
 
-  const MIN_SCORE = 5.0;  // Umbral para backtesting (producción usa 7.0)
+  const MIN_SCORE = 6.0;  // v8.0: backtesting más amplio
 
   // Parámetros
-  const WINDOW = 80;       // velas mínimas para scoring
+  const WINDOW = 200;       // velas mínimas para scoring (EMA 200 necesita 200)
   const ENTRY_OFFSET = 5;  // entrar N velas después de la señal
   const SLIPPAGE = 0.001;  // 0.1% slippage
 
@@ -93,6 +93,7 @@ export async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) 
           openTrade.result = 'LOSS';
           openTrade.exitPrice = openTrade.sl;
           openTrade.exitTime = currentCandle.time;
+          openTrade.pnl = (openTrade.sl - openTrade.entryPrice) / openTrade.entryPrice;
           trades.push(openTrade);
           openTrade = null;
           continue;
@@ -101,6 +102,7 @@ export async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) 
           openTrade.result = 'WIN';
           openTrade.exitPrice = openTrade.t1;
           openTrade.exitTime = currentCandle.time;
+          openTrade.pnl = (openTrade.t1 - openTrade.entryPrice) / openTrade.entryPrice;
           trades.push(openTrade);
           openTrade = null;
           continue;
@@ -110,6 +112,7 @@ export async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) 
           openTrade.result = 'LOSS';
           openTrade.exitPrice = openTrade.sl;
           openTrade.exitTime = currentCandle.time;
+          openTrade.pnl = (openTrade.entryPrice - openTrade.sl) / openTrade.entryPrice;
           trades.push(openTrade);
           openTrade = null;
           continue;
@@ -118,6 +121,7 @@ export async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) 
           openTrade.result = 'WIN';
           openTrade.exitPrice = openTrade.t1;
           openTrade.exitTime = currentCandle.time;
+          openTrade.pnl = (openTrade.entryPrice - openTrade.t1) / openTrade.entryPrice;
           trades.push(openTrade);
           openTrade = null;
           continue;

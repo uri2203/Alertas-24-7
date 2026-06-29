@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  engine/signals.test.js  —  Tests for v7.1
+//  engine/signals.test.js  —  Tests for v8.0
 //  Node.js built-in test runner (no extra deps)
 // ═══════════════════════════════════════════════════════════════
 import { describe, it } from 'node:test';
@@ -8,7 +8,8 @@ import {
   ema, calcRSI, calcMACD, calcADX, calcATR,
   calcPivots, calcFibonacci, calcVPOC, isVolumeAboveAvg,
   detectSwings, detectElliott, scoreSignal,
-  detectFibBounce, calcRSIDynamic,
+  detectFibBounce, calcRSIDynamic, calcOBV,
+  detectTrend, detectCandlePatterns,
   TF_CONFIG,
 } from './signals.js';
 
@@ -82,7 +83,7 @@ describe('ADX', () => {
     assert.ok(['up','dn',null].includes(r.dir));
   });
   it('detects trending market', () => {
-    const candles = genCandles(60, 100, 0.5); // strong uptrend
+    const candles = genCandles(60, 100, 0.5);
     const r = calcADX(candles);
     assert.ok(r);
     assert.ok(typeof r.trending === 'boolean');
@@ -116,6 +117,8 @@ describe('RSI Dynamic', () => {
     const r = calcRSIDynamic(genCandles(100), 14, 50);
     assert.ok(r && typeof r.p30 === 'number' && typeof r.p70 === 'number');
     assert.ok(r.p30 < r.p70);
+    assert.ok(typeof r.p20 === 'number');
+    assert.ok(typeof r.p80 === 'number');
   });
 });
 
@@ -127,7 +130,6 @@ describe('Fibonacci Bounce', () => {
   it('detects bounce', () => {
     const fib = { r786: 95, r618: 97, r500: 100, r382: 103, r236: 105, H: 110, L: 90 };
     const candles = genCandles(15, 100);
-    // Manually set last candle to bounce off r618
     candles[14] = { time: 1014, open: 96.5, high: 97.2, low: 95.8, close: 97.5, vol: 1000 };
     const r = detectFibBounce(candles, fib, 2);
     assert.ok(r === null || (r && r.direction));
@@ -171,6 +173,41 @@ describe('Volume', () => {
   });
 });
 
+// ── OBV ──────────────────────────────────────────────────────────
+describe('OBV', () => {
+  it('returns null for insufficient data', () => {
+    assert.equal(calcOBV(genCandles(5)), null);
+  });
+  it('returns valid OBV', () => {
+    const r = calcOBV(genCandles(30));
+    assert.ok(r && typeof r.value === 'number');
+    assert.ok(typeof r.rising === 'boolean');
+  });
+});
+
+// ── Trend Detection ──────────────────────────────────────────────
+describe('Trend Detection', () => {
+  it('returns null for insufficient data', () => {
+    assert.equal(detectTrend(genCandles(50)), null);
+  });
+  it('returns valid trend', () => {
+    const r = detectTrend(genCandles(250));
+    assert.ok(r);
+    assert.ok(['up','dn',null].includes(r.dir));
+    assert.ok(typeof r.ema50 === 'number');
+    assert.ok(typeof r.ema200 === 'number');
+  });
+});
+
+// ── Candle Patterns ──────────────────────────────────────────────
+describe('Candle Patterns', () => {
+  it('returns object with bullish/bearish', () => {
+    const r = detectCandlePatterns(genCandles(10));
+    assert.ok(typeof r.bullish === 'boolean');
+    assert.ok(typeof r.bearish === 'boolean');
+  });
+});
+
 // ── Swing Detection ──────────────────────────────────────────────
 describe('Swing Detection', () => {
   it('detects swing highs and lows', () => {
@@ -189,7 +226,7 @@ describe('Score Signal', () => {
     assert.ok(r);
     assert.ok(r.signal === 'WAIT' || r.signal === 'LONG' || r.signal === 'SHORT');
     assert.ok(typeof r.score === 'number');
-    assert.equal(r.max, 11);  // v7.1: weighted total = 11
+    assert.equal(r.max, 14);  // v8.0: weighted total = 14
   });
   it('returns valid structure', () => {
     const candles = genCandles(100);
@@ -197,6 +234,8 @@ describe('Score Signal', () => {
     assert.ok(r.rules);
     assert.ok(typeof r.rules.adxOk === 'boolean');
     assert.ok(typeof r.rules.macdOk === 'boolean');
+    assert.ok(typeof r.rules.emaOk === 'boolean');
+    assert.ok(typeof r.rules.obvOk === 'boolean');
     assert.ok('fibOk' in r.rules);
   });
   it('handles different timeframes', () => {
@@ -205,5 +244,12 @@ describe('Score Signal', () => {
       const r = scoreSignal(candles, tf, TF_CONFIG);
       assert.ok(r);
     }
+  });
+  it('requires direction confirmation from multiple indicators', () => {
+    // Random data should not produce strong signals
+    const candles = genCandles(100);
+    const r = scoreSignal(candles, '1h', TF_CONFIG);
+    // Random data: score should be below threshold
+    assert.ok(r.score < 10);
   });
 });
