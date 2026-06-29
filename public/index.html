@@ -1046,6 +1046,13 @@ function initChart() {
         if (r.width > 10 && r.height > 10) chart.applyOptions({ width: r.width, height: r.height });
       });
     }).observe(wrap);
+
+    // Safety: force resize after 200ms to catch any layout shifts
+    setTimeout(() => {
+      if (chart && wrap.clientWidth > 10 && wrap.clientHeight > 10) {
+        chart.applyOptions({ width: wrap.clientWidth, height: wrap.clientHeight });
+      }
+    }, 200);
   });
 }
 
@@ -1658,7 +1665,16 @@ async function fullReload() {
 
 function setChartData() {
   safe(() => {
-    const cc = CC[curTF]; if (!cc || !chart) return;
+    const cc = CC[curTF]; if (!cc || !cc.length) return;
+    // If chart isn't ready yet, retry until it is
+    if (!chart) {
+      const retry = () => {
+        if (chart) { setChartData(); return; }
+        setTimeout(retry, 100);
+      };
+      retry();
+      return;
+    }
     cSer.setData(cc.map(c => ({time:c.time, open:c.open, high:c.high, low:c.low, close:c.close})));
     vSer.setData(cc.map(c => ({time:c.time, value:c.vol, color:c.close>=c.open?'rgba(38,166,154,.3)':'rgba(239,83,80,.3)'})));
     updatePrice(cc[cc.length-1].close);
@@ -1782,7 +1798,22 @@ function initDashboard() {
   safe(() => {
     initChart(); buildTFR(MC[curMode]); buildLayR(MC[curMode]);
     updateSess(); fullReload();
-    pollServer(); setInterval(() => safe(pollServer), 30000);
+    pollServer(); async function pollLoop() { await safeAsync(pollServer); setTimeout(pollLoop, 30000); }
+    pollLoop();
+
+    // Safety net: force chart resize every 2s for first 10s after login
+    let resizeChecks = 0;
+    const resizeInterval = setInterval(() => {
+      resizeChecks++;
+      if (resizeChecks > 5 || (chart && document.getElementById('CW-LOAD').classList.contains('H'))) {
+        clearInterval(resizeInterval);
+        return;
+      }
+      const wrap = document.getElementById('CW-WRAP');
+      if (chart && wrap && wrap.clientWidth > 10 && wrap.clientHeight > 10) {
+        chart.applyOptions({ width: wrap.clientWidth, height: wrap.clientHeight });
+      }
+    }, 2000);
   });
 }
 async function togglePause() {
