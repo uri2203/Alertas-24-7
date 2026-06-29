@@ -17,6 +17,7 @@ import { stateRouter }    from './routes/state.js';
 import { alertsRouter }   from './routes/alerts.js';
 import { trackerRouter }  from './routes/tracker.js';
 import { drawingsRouter } from './routes/drawings.js';
+import { backtestRouter } from './routes/backtest.js';
 import { startScanner }   from './engine/scanner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -125,6 +126,7 @@ app.use('/api/state',    requireAuth, stateRouter());
 app.use('/api/telegram', requireAuth, tgLimiter, alertsRouter(CONFIG));
 app.use('/api/tracker',  requireAuth, trackerRouter());
 app.use('/api/drawings', requireAuth, drawingsRouter());
+app.use('/api/backtest', requireAuth, backtestRouter());
 
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 

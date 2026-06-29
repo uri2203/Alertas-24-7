@@ -87,7 +87,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-famil
   <div class="l-box">
     <div class="l-logo">Trading Dashboard PRO</div>
     <div class="l-title">📈 Análisis</div>
-    <div class="l-sub">Elliott Wave · Fibonacci · Dibujos · GitHub</div>
+    <div class="l-sub">Elliott Wave · Fibonacci · Dibujos · Local</div>
     <input class="l-inp" type="password" id="PI" placeholder="contraseña"
            onkeydown="if(event.key==='Enter')doLogin()">
     <button class="l-btn" onclick="doLogin()">INGRESAR</button>
@@ -163,7 +163,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-famil
 <script>
 // ═══════════════════════════════════════════════════════════════
 //  analysis.html — Trading Dashboard PRO v7
-//  Análisis avanzado: Elliott Wave + Dibujos + GitHub storage
+//  Análisis avanzado: Elliott Wave + Dibujos + Local storage
 // ═══════════════════════════════════════════════════════════════
 
 // ── ESTADO GLOBAL ────────────────────────────────────────────────
@@ -221,7 +221,7 @@ async function doLogin() {
 function showApp() {
   document.getElementById('LS').classList.add('H');
   document.getElementById('APP').classList.remove('H');
-  init();
+  requestAnimationFrame(() => init());
 }
 
 // ── INIT ─────────────────────────────────────────────────────────
@@ -736,14 +736,14 @@ function schedSave(){
   clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,2500);
 }
 async function saveNow(){
-  clearTimeout(saveTimer); setSave('Guardando en GitHub...','pend');
+  clearTimeout(saveTimer); setSave('Guardando...','pend');
   try{
     const r=await fetch(`/api/drawings/${curSym}/${curTF}`,{
       method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()},
       body:JSON.stringify({drawings,sha:dSHA}),
     });
     const d=await r.json();
-    if(d.ok){dSHA=d.sha;setSave(`✓ ${drawings.length} dibujo(s) guardado(s) en GitHub`,'ok');}
+    if(d.ok){dSHA=d.sha;setSave(`✓ ${drawings.length} dibujo(s) guardado(s)`,'ok');}
     else setSave('⚠ Error: '+d.error,'err');
   }catch(e){setSave('⚠ '+e.message,'err');}
 }

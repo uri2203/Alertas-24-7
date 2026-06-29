@@ -45,7 +45,7 @@ async function fetchMayorCandles(symbol, tf) {
 }
 
 // ── BACKTEST PRINCIPAL ─────────────────────────────────────────
-async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) {
+export async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) {
   console.log(`\n╔══════════════════════════════════════════════╗`);
   console.log(`║  BACKTESTER v7.2 — ${symbol} ${tf.padEnd(4)}             ║`);
   console.log(`║  Velas: ${lookback} | Score≥6.0 | Eval: ${evalHours.join(',')}h      ║`);
@@ -199,7 +199,7 @@ async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) {
 }
 
 // ── CALCULAR MÉTRICAS ──────────────────────────────────────────
-function calcMetrics(trades) {
+export function calcMetrics(trades) {
   if (!trades.length) return { total: 0, message: 'Sin trades generados' };
 
   const wins = trades.filter(t => t.result === 'WIN');
@@ -208,7 +208,7 @@ function calcMetrics(trades) {
 
   const avgWin = wins.length ? wins.reduce((a, t) => a + (t.pnl || 0), 0) / wins.length : 0;
   const avgLoss = losses.length ? Math.abs(losses.reduce((a, t) => a + (t.pnl || 0), 0) / losses.length) : 0;
-  const profitFactor = avgLoss > 0 ? +(avgWin / avgLoss).toFixed(2) : avgWin > 0 ? Infinity : 0;
+  const profitFactor = avgLoss > 0 ? +(avgWin / avgLoss).toFixed(2) : avgWin > 0 ? 999.99 : 0;
 
   // Max drawdown
   let equity = 100, maxEquity = 100, maxDrawdown = 0;

@@ -40,6 +40,15 @@
   .metric-big { font-size: 16px; font-weight: bold; }
   .pnl-pos { color: #26a69a; }
   .pnl-neg { color: #ef5350; }
+  .bt-panel { background: #12121a; border: 1px solid #2e3d62; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+  .bt-panel h3 { font-size: 12px; color: #3d7eff; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  .bt-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .bt-input { background: #1a2130; border: 1px solid #2e3d62; border-radius: 4px; padding: 6px 10px; font-size: 11px; color: #c9d6e8; font-family: inherit; width: 120px; }
+  .bt-input:focus { outline: none; border-color: #3d7eff; }
+  .bt-btn { background: #3d7eff; color: #fff; border: none; border-radius: 4px; padding: 6px 14px; font-size: 11px; font-weight: bold; cursor: pointer; font-family: inherit; }
+  .bt-btn:hover { background: #2e66d9; }
+  .bt-btn:disabled { background: #2e3d62; color: #64748b; cursor: not-allowed; }
+  .bt-status { font-size: 10px; color: #64748b; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -56,7 +65,27 @@
   <b>Funciona incluso con señales pausadas</b> — la pausa solo detiene los envíos a Telegram.
 </div>
 
+<!-- BACKTEST PANEL -->
+<div class="bt-panel">
+  <h3>🔬 Backtester Automático</h3>
+  <div class="bt-row">
+    <select class="bt-input" id="BT-SYM" style="width:140px">
+      <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
+      <option>BNBUSDT</option><option>XRPUSDT</option><option>ADAUSDT</option>
+      <option>DOGEUSDT</option>
+    </select>
+    <select class="bt-input" id="BT-TF" style="width:80px">
+      <option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
+      <option value="15m">15m</option><option value="5m">5m</option>
+    </select>
+    <input class="bt-input" id="BT-LB" type="number" value="500" min="200" max="1500" placeholder="velas">
+    <button class="bt-btn" id="BT-RUN" onclick="runBacktest()">▶ Ejecutar</button>
+  </div>
+  <div class="bt-status" id="BT-STATUS"></div>
+</div>
+
 <div id="CONTENT"><div class="loading">Cargando estadísticas...</div></div>
+<div id="BT-RESULTS"></div>
 
 <script>
 const fp = v => !v || isNaN(v) ? '—' : v > 100 ? v.toLocaleString('en-US', {maximumFractionDigits:0}) : v.toFixed(4);
@@ -245,6 +274,160 @@ async function load() {
 
 load();
 setInterval(load, 60000);
+
+// ── BACKTEST ──────────────────────────────────────────────
+async function runBacktest() {
+  const sym = document.getElementById('BT-SYM').value;
+  const tf  = document.getElementById('BT-TF').value;
+  const lb  = parseInt(document.getElementById('BT-LB').value) || 500;
+  const btn = document.getElementById('BT-RUN');
+  const st  = document.getElementById('BT-STATUS');
+  const res = document.getElementById('BT-RESULTS');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Ejecutando...';
+  st.textContent = `Ejecutando backtest ${sym} ${tf} ${lb} velas... (puede tardar 10-30s)`;
+
+  try {
+    const r = await fetch('/api/backtest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: sym, tf, lookback: lb }),
+    });
+    const d = await r.json();
+
+    if (!d.ok) {
+      st.textContent = '❌ ' + (d.error || 'Error desconocido');
+      res.innerHTML = '';
+    } else {
+      st.textContent = `✅ Completado: ${d.total} trades en ${sym} ${tf}`;
+      res.innerHTML = `
+        <div class="section" style="margin-top:20px">
+          <h2>📊 Resultado Backtest — ${sym} ${tf} (${lb} velas)</h2>
+          <div class="grid">
+            <div class="card">
+              <div class="card-title">Total Trades</div>
+              <div class="card-val neu">${d.total}</div>
+            </div>
+            <div class="card">
+              <div class="card-title">Win Rate</div>
+              <div class="card-val ${d.winRate >= 60 ? 'win' : d.winRate < 45 ? 'loss' : 'neu'}">${d.winRate}%</div>
+              <div class="bar-wrap"><div class="bar-fill" style="width:${d.winRate}%"></div></div>
+            </div>
+            <div class="card">
+              <div class="card-title">Profit Factor</div>
+              <div class="card-val ${d.profitFactor >= 1.5 ? 'win' : d.profitFactor >= 1 ? 'neu' : 'loss'}">${d.profitFactor}</div>
+            </div>
+            <div class="card">
+              <div class="card-title">Sharpe Ratio</div>
+              <div class="card-val ${d.sharpe >= 1 ? 'win' : 'neu'}">${d.sharpe}</div>
+            </div>
+            <div class="card">
+              <div class="card-title">Max Drawdown</div>
+              <div class="card-val loss">${d.maxDrawdown}%</div>
+            </div>
+            <div class="card">
+              <div class="card-title">P&L Total</div>
+              <div class="card-val ${d.totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${d.totalPnl}%</div>
+            </div>
+            <div class="card">
+              <div class="card-title">R:R Promedio</div>
+              <div class="card-val ${d.avgRR >= 1.5 ? 'win' : 'neu'}">${d.avgRR}</div>
+            </div>
+            <div class="card">
+              <div class="card-title">Win / Loss promedio</div>
+              <div class="card-sub">
+                <span class="win">+${d.avgWinPct}%</span> /
+                <span class="loss">-${d.avgLossPct}%</span>
+              </div>
+            </div>
+          </div>
+
+          ${d.byDir ? `
+          <div class="section">
+            <h2>Por Dirección</h2>
+            <div class="grid">
+              <div class="card">
+                <div class="card-title">LONG</div>
+                <div class="card-val win" style="font-size:20px">${d.byDir.LONG.total} trades</div>
+                <div class="card-sub">${d.byDir.LONG.winRate}% WR</div>
+              </div>
+              <div class="card">
+                <div class="card-title">SHORT</div>
+                <div class="card-val loss" style="font-size:20px">${d.byDir.SHORT.total} trades</div>
+                <div class="card-sub">${d.byDir.SHORT.winRate}% WR</div>
+              </div>
+            </div>
+          </div>` : ''}
+
+          ${d.byScore && d.byScore.length ? `
+          <div class="section">
+            <h2>Por Rango de Score</h2>
+            <table>
+              <tr><th>Score</th><th>Trades</th><th>Win Rate</th><th>P&L</th></tr>
+              ${d.byScore.map(r => `
+              <tr>
+                <td><b>${r.range}</b></td>
+                <td>${r.total}</td>
+                <td class="${r.winRate >= 60 ? 'win' : r.winRate < 45 ? 'loss' : 'neu'}">${r.winRate}%</td>
+                <td class="${r.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r.pnl}%</td>
+              </tr>`).join('')}
+            </table>
+          </div>` : ''}
+
+          ${d.trades && d.trades.length ? `
+          <div class="section">
+            <h2>Últimos ${d.trades.length} Trades</h2>
+            <table>
+              <tr><th>Par</th><th>TF</th><th>Señal</th><th>Score</th><th>Entrada</th><th>Salida</th><th>Resultado</th><th>P&L</th></tr>
+              ${d.trades.map(t => `
+              <tr>
+                <td><b>${t.sym}</b></td>
+                <td>${t.tf}</td>
+                <td><span class="badge ${t.signal==='LONG'?'badge-long':'badge-short'}">${t.signal}</span></td>
+                <td>${t.score}</td>
+                <td>${fp(t.entry)}</td>
+                <td>${t.exit ? fp(t.exit) : '—'}</td>
+                <td>${badgeResult(t.result)}</td>
+                <td class="${t.pnl && t.pnl.includes('-') ? 'pnl-neg' : 'pnl-pos'}">${t.pnl || '—'}</td>
+              </tr>`).join('')}
+            </table>
+          </div>` : ''}
+        </div>
+      `;
+    }
+  } catch (e) {
+    st.textContent = '❌ Error: ' + e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = '▶ Ejecutar';
+}
+
+// Cargar resultados existentes
+async function loadBacktestResults() {
+  try {
+    const r = await fetch('/api/backtest');
+    const d = await r.json();
+    if (d.ok && d.results && d.results.length) {
+      const el = document.getElementById('BT-RESULTS');
+      if (el && !el.innerHTML) {
+        el.innerHTML = d.results.map(m => `
+          <div class="section" style="margin-top:12px">
+            <h2>📊 Backtest guardado — ${m.symbol} ${m.tf}</h2>
+            <div class="grid">
+              <div class="card"><div class="card-title">Trades</div><div class="card-val neu">${m.total}</div></div>
+              <div class="card"><div class="card-title">Win Rate</div><div class="card-val ${m.winRate >= 60 ? 'win' : 'neu'}">${m.winRate}%</div></div>
+              <div class="card"><div class="card-title">P&L</div><div class="card-val ${m.totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${m.totalPnl}%</div></div>
+              <div class="card"><div class="card-title">Profit Factor</div><div class="card-val">${m.profitFactor}</div></div>
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+  } catch {}
+}
+loadBacktestResults();
 </script>
 </body>
 </html>
