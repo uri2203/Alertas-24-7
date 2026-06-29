@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  engine/telegram.js  —  Trading Dashboard PRO v7
+//  engine/telegram.js  —  Trading Dashboard PRO v8.0
 // ═══════════════════════════════════════════════════════════════
 
 const fp = v => {
@@ -14,7 +14,7 @@ export function buildAlertMessage(sym, tf, sig, isDivergence = false) {
   const time  = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
   const r     = sig.rules || {};
 
-  // Encabezado especial si es señal de divergencia
+  // Encabezado especial si es senal de divergencia
   const header = isDivergence
     ? `📐 <b>DIVERGENCIA RSI — ${sig.signal} ${sym} ${tf.toUpperCase()}</b>`
     : `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>`;
@@ -25,11 +25,19 @@ export function buildAlertMessage(sym, tf, sig, isDivergence = false) {
       : `\n⚠️ <b>Divergencia detectada pero SIN confirmación:</b> ${sig.divergence === 'bullish' ? '🟢 Alcista' : '🔴 Bajista'} (requiere MACD+ADX)`
     : '';
 
+  // ML + Regime info
+  const mlLine = sig.mlConfidence
+    ? `\n🤖 <b>ML Confidence:</b> ${(sig.mlConfidence * 100).toFixed(0)}%`
+    : '';
+  const regimeLine = sig.regime
+    ? `\n📊 <b>Régimen:</b> ${sig.regime}${sig.regimeConfidence ? ` (${(sig.regimeConfidence * 100).toFixed(0)}%)` : ''}`
+    : '';
+
   return `${header}
 
 🕐 <b>Hora MX:</b> ${time}
 📊 <b>Score:</b> ${sig.score}/${sig.max} (ponderado)
-${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${divLine}
+${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${divLine}${mlLine}${regimeLine}
 
 💰 <b>Niveles de operación:</b>
   • Entrada:  <code>${fp(sig.entry)}</code>
@@ -49,7 +57,7 @@ ${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${div
   ${r.macdOk      ? '✅' : '❌'} MACD confirmando dirección
   ${r.adxOk       ? '✅' : '❌'} ADX+DI en tendencia + dirección correcta
 
-⚠️ <i>Sistema automático v7.2. Divergencia requiere MACD+ADX. Valida siempre con tu análisis.</i>`;
+⚠️ <i>Sistema automático v8.0 con ML+Regime. Valida siempre con tu análisis.</i>`;
 }
 
 export async function sendTelegram(token, chatId, text) {

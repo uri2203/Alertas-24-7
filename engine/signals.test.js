@@ -168,7 +168,10 @@ describe('Volume', () => {
     assert.ok(isVolumeAboveAvg(candles));
   });
   it('detects normal volume', () => {
-    const candles = genCandles(25);
+    const candles = [];
+    for (let i = 0; i < 25; i++) {
+      candles.push({ time: i, open: 100, high: 101, low: 99, close: 100, vol: 100 });
+    }
     assert.ok(!isVolumeAboveAvg(candles));
   });
 });
