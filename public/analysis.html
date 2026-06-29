@@ -174,26 +174,49 @@ let candles = [];
 let drawings = [], dSHA = null;
 let activeTool = 'cursor', dipProg = null;
 let layers = { ew:true, fib:true, piv:true, fld:true, vpoc:true };
-let ewPat = null;
+let ewPats = []; // Todos los patrones detectados en múltiples escalas
 let fldAS = null, fldBS = null;
-let saveTimer = null, pwdHash = null;
+let saveTimer = null;
 let ind = {};
 
-// ── AUTH ─────────────────────────────────────────────────────────
-async function sha256(msg) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(msg));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+// ── AUTH — usa misma sesión que index.html ──────────────────────
+let sessionToken = null;
+function authHeaders() {
+  return sessionToken ? { 'X-Session-Token': sessionToken } : {};
 }
 async function initAuth() {
-  try { const d = await fetch('/api/config').then(r=>r.json()); pwdHash = d.passwordHash; }
-  catch { pwdHash = await sha256('trading2025'); }
-  if (sessionStorage.getItem('tdp-auth') === '1') showApp();
-  else document.getElementById('PI').focus();
+  sessionToken = sessionStorage.getItem('tdp-session');
+  if (sessionToken) {
+    try {
+      const r = await fetch('/api/config', { headers: authHeaders() });
+      if (r.ok) { showApp(); return; }
+    } catch {}
+    sessionStorage.removeItem('tdp-session');
+    sessionToken = null;
+  }
+  document.getElementById('PI').focus();
 }
 async function doLogin() {
   const v = document.getElementById('PI').value; if (!v) return;
-  if (await sha256(v) === pwdHash) { sessionStorage.setItem('tdp-auth','1'); showApp(); }
-  else { document.getElementById('LE').textContent='Contraseña incorrecta'; document.getElementById('PI').value=''; document.getElementById('PI').focus(); }
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: v }),
+    });
+    const d = await r.json();
+    if (d.ok && d.token) {
+      sessionToken = d.token;
+      sessionStorage.setItem('tdp-session', d.token);
+      showApp();
+    } else {
+      document.getElementById('LE').textContent = d.error || 'Contraseña incorrecta';
+      document.getElementById('PI').value = '';
+      document.getElementById('PI').focus();
+    }
+  } catch {
+    document.getElementById('LE').textContent = 'Error de conexión';
+  }
 }
 function showApp() {
   document.getElementById('LS').classList.add('H');
@@ -361,11 +384,11 @@ function detectSwings(candles, lb) {
 }
 
 function runElliott() {
-  if(candles.length<40){ewPat=null;updateEWBadge();return;}
+  if(candles.length<40){ewPats=[];updateEWBadge();return;}
 
-  // Buscar en múltiples escalas para mayor cobertura
-  const scales = [80, 150, 250, 400];
-  let bestPat = null;
+  // Buscar patrones en múltiples escalas para ver TODOS los grados
+  const scales = [60, 100, 180, 300, 500];
+  const found = [];
 
   for (const sliceLen of scales) {
     const slice = candles.slice(-Math.min(sliceLen, candles.length));
@@ -373,10 +396,14 @@ function runElliott() {
     const lb = Math.max(2, Math.floor(slice.length / 25));
     const sw = detectSwings(slice, lb);
     const pat = findPatternInSwings(sw);
-    if(pat) bestPat = pat; // Se queda con el más reciente encontrado
+    if(pat) {
+      pat.scale = sliceLen; // Guardar la escala para referencia
+      found.push(pat);
+    }
   }
 
-  ewPat = bestPat;
+  // Eliminar duplicados (mismo dir + mismos puntos base)
+  ewPats = found;
   updateEWBadge();
 }
 
@@ -416,11 +443,14 @@ function findPatternInSwings(sw) {
 
 function updateEWBadge() {
   const b=document.getElementById('EWB'), d=document.getElementById('EWD');
-  if(!ewPat){b.textContent='—';b.className='ew-b ew-neu';d.textContent='Sin patrón';return;}
+  if(!ewPats.length){b.textContent='—';b.className='ew-b ew-neu';d.textContent='Sin patrón';return;}
+
+  const degrees = ['Sub-Min','Minuette','Minute','Minor','Intermed'];
+  const last = ewPats[ewPats.length - 1];
   const lbls=['①','②','③','④','⑤'];
-  b.textContent=`Onda ${lbls[ewPat.wn-1]||ewPat.wn}`;
-  b.className=`ew-b ${ewPat.dir==='up'?'ew-up':'ew-dn'}`;
-  d.textContent=ewPat.wn===5?'⚠️ Posible fin de impulso':ewPat.wn===4?'⏳ Corrección — esperar W5':ewPat.dir==='up'?'↑ Impulso alcista':'↓ Impulso bajista';
+  b.textContent=`${ewPats.length} grado(s)`;
+  b.className=`ew-b ${last.dir==='up'?'ew-up':'ew-dn'}`;
+  d.textContent=ewPats.map((p,i) => `${degrees[i]||`G${i}`}: ${lbls[p.wn-1]||p.wn} ${p.dir==='up'?'▲':'▼'}`).join(' · ');
 }
 
 // ── CANVAS — COORDENADAS ──────────────────────────────────────────
@@ -438,91 +468,102 @@ function redraw() {
   if(layers.fib  && ind.fib)  drawFibs(ctx,ind.fib);
   if(layers.piv  && ind.piv)  drawPivs(ctx,ind.piv);
   if(layers.vpoc && ind.vpoc) drawVPOC(ctx,ind.vpoc);
-  if(layers.ew   && ewPat)    drawEW(ctx,ewPat);
+  if(layers.ew && ewPats.length) ewPats.forEach(p => drawEW(ctx, p));
   drawings.forEach(d=>drawShape(ctx,d));
   if(dipProg) drawShape(ctx,dipProg,true);
 }
 
-// ── CANVAS — ELLIOTT WAVE ──────────────────────────────────────────
+// ── CANVAS — ELLIOTT WAVE (TODOS LOS GRADOS) ──────────────────────
+const EW_DEGREE_COLORS = [
+  { line: '#3d7eff', bg: 'rgba(61,126,255,0.15)', width: 3.0, label: 'Sub-Min' },   // azul
+  { line: '#a78bfa', bg: 'rgba(167,139,250,0.15)', width: 2.5, label: 'Minuette' },  // violeta
+  { line: '#26a69a', bg: 'rgba(38,166,154,0.15)', width: 2.0, label: 'Minute' },     // verde
+  { line: '#f59e0b', bg: 'rgba(245,158,11,0.15)', width: 1.8, label: 'Minor' },      // dorado
+  { line: '#ef5350', bg: 'rgba(239,83,80,0.15)', width: 1.5, label: 'Intermediate' }, // rojo
+];
 function drawEW(ctx, p) {
   const W=p.pts; if(!W||W.length<2)return;
   const dc=document.getElementById('DC');
+  const degreeIdx = Math.min(EW_DEGREE_COLORS.length - 1, ewPats.indexOf(p));
+  const deg = EW_DEGREE_COLORS[degreeIdx] || EW_DEGREE_COLORS[EW_DEGREE_COLORS.length - 1];
 
   // Colores de cada pata
   const legCol=p.dir==='up'
-    ?['#26a69a','#ef5350','#3d7eff','#ef5350','#26a69a']
-    :['#ef5350','#26a69a','#ef5350','#26a69a','#ef5350'];
+    ?[deg.line, deg.line, deg.line, deg.line, deg.line]
+    :[deg.line, deg.line, deg.line, deg.line, deg.line];
 
   // Dibujar patas
   for(let i=0;i<W.length-1;i++){
     const x1=tX(W[i].time),y1=pY(W[i].p),x2=tX(W[i+1].time),y2=pY(W[i+1].p);
     if(x1==null||y1==null||x2==null||y2==null)continue;
     ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);
-    ctx.strokeStyle=legCol[i]||'#fff';ctx.lineWidth=2.5;ctx.setLineDash([]);ctx.stroke();
+    ctx.strokeStyle=legCol[i]||deg.line;ctx.lineWidth=deg.width;ctx.setLineDash([]);ctx.stroke();
   }
 
-  // Proyección W5 (línea punteada dorada)
+  // Proyección W5 (línea punteada)
   if(W.length>=5){
     const last=W[W.length-1], x0=tX(last.time), y0=pY(last.p), yT=pY(p.w5tgt);
     if(x0!=null&&y0!=null&&yT!=null){
       const xT=x0+100;
       ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(xT,yT);
-      ctx.strokeStyle='#f59e0b';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.stroke();
+      ctx.strokeStyle=deg.line;ctx.lineWidth=1.2;ctx.setLineDash([5,4]);ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle='rgba(245,158,11,0.92)';ctx.font='bold 10px Courier New';
-      ctx.fillText(`W5 → ${fp(p.w5tgt)}`,xT+4,yT+(yT<y0?-8:14));
+      ctx.fillStyle=deg.line;ctx.font='bold 9px Courier New';
+      ctx.fillText(`${deg.label} W5→${fp(p.w5tgt)}`,xT+4,yT+(yT<y0?-8:14));
     }
   }
   ctx.setLineDash([]);
 
   // Puntos y etiquetas
   const ptLbls=['0','①','②','③','④','⑤'];
-  const ptCol=['#94a3b8','#26a69a','#ef5350','#3d7eff','#ef5350','#26a69a'];
-  const ptColDn=['#94a3b8','#ef5350','#26a69a','#ef5350','#26a69a','#ef5350'];
-  const colors=p.dir==='up'?ptCol:ptColDn;
 
   for(let i=0;i<W.length;i++){
     const x=tX(W[i].time),y=pY(W[i].p);
     if(x==null||y==null)continue;
-    const col=colors[i]||'#fff';
 
     // Punto (círculo relleno)
-    ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);
-    ctx.fillStyle=col;ctx.fill();
-    ctx.strokeStyle='#0e1117';ctx.lineWidth=2;ctx.stroke();
+    ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);
+    ctx.fillStyle=deg.line;ctx.fill();
+    ctx.strokeStyle='#0e1117';ctx.lineWidth=1.5;ctx.stroke();
 
-    // Etiqueta: arriba en H, abajo en L
+    // Etiqueta
     const above=W[i].t==='H';
-    const yOff=above?-22:20;
-    ctx.fillStyle=col;ctx.font='bold 13px Courier New';ctx.textAlign='center';
+    const yOff=above?-18:16;
+    ctx.fillStyle=deg.line;ctx.font='bold 10px Courier New';ctx.textAlign='center';
     ctx.fillText(ptLbls[i]||`${i}`,x,y+yOff);
-    ctx.fillStyle='rgba(200,215,232,0.65)';ctx.font='9px Courier New';
-    ctx.fillText(fp(W[i].p),x,y+yOff+(above?-12:13));
+    ctx.fillStyle='rgba(200,215,232,0.5)';ctx.font='8px Courier New';
+    ctx.fillText(fp(W[i].p),x,y+yOff+(above?-10:11));
     ctx.textAlign='left';
   }
 
-  // Panel de información Elliott (esquina superior izquierda)
-  const bx=8,by=8,bw=215,bh=92;
-  ctx.beginPath();
-  ctx.moveTo(bx+5,by);ctx.lineTo(bx+bw-5,by);ctx.arcTo(bx+bw,by,bx+bw,by+5,5);
-  ctx.lineTo(bx+bw,by+bh-5);ctx.arcTo(bx+bw,by+bh,bx+bw-5,by+bh,5);
-  ctx.lineTo(bx+5,by+bh);ctx.arcTo(bx,by+bh,bx,by+bh-5,5);
-  ctx.lineTo(bx,by+5);ctx.arcTo(bx,by,bx+5,by,5);ctx.closePath();
-  ctx.fillStyle='rgba(14,17,23,0.85)';ctx.fill();
-  ctx.strokeStyle='rgba(61,126,255,0.35)';ctx.lineWidth=1;ctx.stroke();
+  // Panel de información (solo para el primer grado detectado — el más grande)
+  if(degreeIdx === 0) {
+    const bx=8,by=8,bw=215,bh=92;
+    ctx.beginPath();
+    ctx.moveTo(bx+5,by);ctx.lineTo(bx+bw-5,by);ctx.arcTo(bx+bw,by,bx+bw,by+5,5);
+    ctx.lineTo(bx+bw,by+bh-5);ctx.arcTo(bx+bw,by+bh,bx+bw-5,by+bh,5);
+    ctx.lineTo(bx+5,by+bh);ctx.arcTo(bx,by+bh,bx,by+bh-5,5);
+    ctx.lineTo(bx,by+5);ctx.arcTo(bx,by,bx+5,by,5);ctx.closePath();
+    ctx.fillStyle='rgba(14,17,23,0.85)';ctx.fill();
+    ctx.strokeStyle='rgba(61,126,255,0.35)';ctx.lineWidth=1;ctx.stroke();
 
-  const lblsNum=['①','②','③','④','⑤'];
-  const c2=p.dir==='up'?'#26a69a':'#ef5350';
-  ctx.font='bold 10px Courier New';ctx.fillStyle=c2;
-  ctx.fillText(`Elliott — ${p.dir==='up'?'ALCISTA 🟢':'BAJISTA 🔴'}`,bx+8,by+16);
-  ctx.font='9px Courier New';ctx.fillStyle='#c9d6e8';
-  ctx.fillText(`Onda actual: ${lblsNum[p.wn-1]||p.wn}`,bx+8,by+30);
-  ctx.fillText(`W1: ${fp(p.w1)}  ·  W3: ${fp(p.w3)} (${(p.w3/p.w1*100).toFixed(0)}% de W1)`,bx+8,by+43);
-  ctx.fillText(`W2 retroceso: ${(p.w2r*100).toFixed(0)}%  ·  W4 retroceso: ${(p.w4r*100).toFixed(0)}%`,bx+8,by+56);
-  ctx.fillStyle='#f59e0b';ctx.font='bold 9px Courier New';
-  ctx.fillText(`Objetivo W5: ${fp(p.w5tgt)}`,bx+8,by+70);
-  ctx.fillStyle=p.wn===5?'#ef5350':p.wn===4?'#f59e0b':'#26a69a';
-  ctx.fillText(p.wn===5?'⚠ Impulso puede terminar':p.wn===4?'⏳ Corrección en curso':'Tendencia activa',bx+8,by+84);
+    const lblsNum=['①','②','③','④','⑤'];
+    ctx.font='bold 10px Courier New';ctx.fillStyle=deg.line;
+    ctx.fillText(`Elliott — ${ewPats.length} grado(s) detectados`,bx+8,by+16);
+    ctx.font='9px Courier New';ctx.fillStyle='#c9d6e8';
+    ctx.fillText(`Onda actual: ${lblsNum[p.wn-1]||p.wn}`,bx+8,by+30);
+    ctx.fillText(`W1: ${fp(p.w1)}  ·  W3: ${fp(p.w3)} (${(p.w3/p.w1*100).toFixed(0)}% de W1)`,bx+8,by+43);
+    ctx.fillText(`W2 retroceso: ${(p.w2r*100).toFixed(0)}%  ·  W4 retroceso: ${(p.w4r*100).toFixed(0)}%`,bx+8,by+56);
+    ctx.fillStyle='#f59e0b';ctx.font='bold 9px Courier New';
+    ctx.fillText(`Objetivo W5: ${fp(p.w5tgt)}`,bx+8,by+70);
+    // Listar todos los grados
+    ctx.fillStyle='#94a3b8';ctx.font='8px Courier New';
+    const degList = ewPats.map((pt,i) => {
+      const d2 = EW_DEGREE_COLORS[i] || EW_DEGREE_COLORS[EW_DEGREE_COLORS.length-1];
+      return `${d2.label}:${lblsNum[pt.wn-1]||pt.wn}`;
+    }).join(' · ');
+    ctx.fillText(`Grados: ${degList}`,bx+8,by+84);
+  }
 }
 
 // ── CANVAS — FIBONACCI ────────────────────────────────────────────
@@ -685,7 +726,7 @@ function updateBar(){
 // ── GITHUB: GUARDAR/CARGAR DIBUJOS ────────────────────────────────
 async function loadDrawings(){
   try{
-    const r=await fetch(`/api/drawings/${curSym}/${curTF}`);
+    const r=await fetch(`/api/drawings/${curSym}/${curTF}`, { headers: authHeaders() });
     const d=await r.json();
     drawings=d.drawings||[]; dSHA=d.sha||null;
   }catch{drawings=[];dSHA=null;}
@@ -698,7 +739,7 @@ async function saveNow(){
   clearTimeout(saveTimer); setSave('Guardando en GitHub...','pend');
   try{
     const r=await fetch(`/api/drawings/${curSym}/${curTF}`,{
-      method:'POST', headers:{'Content-Type':'application/json'},
+      method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()},
       body:JSON.stringify({drawings,sha:dSHA}),
     });
     const d=await r.json();
