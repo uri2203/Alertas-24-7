@@ -13,6 +13,8 @@ import { fileURLToPath } from 'url';
 import * as dotenv       from 'dotenv';
 dotenv.config();
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 import { configRouter }    from './routes/config.js';
 import { stateRouter }     from './routes/state.js';
 import { alertsRouter }    from './routes/alerts.js';
@@ -133,6 +135,10 @@ app.use('/api/backtest',  requireAuth, backtestRouter());
   app.use('/api/optimizer', requireAuth, optimizerRouter());
   app.use('/api/agent',    requireAuth, agentRouter());
 
+// ── STATIC FILES ───────────────────────────────────────────────
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ── CATCH-ALL (SPA) ────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // ── SHUTDOWN ──────────────────────────────────────────────────
