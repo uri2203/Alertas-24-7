@@ -270,6 +270,7 @@ import { detectBOS, detectOrderBlocks, detectFVG, detectLiquidityZones, priceInZ
 import { getSeasonality, getWeeklyCycle, getHourlyCycle, getBitcoinCycle, detectVolumeRotation, timeFactorScore, fullCycleMap } from './cycles.js';
 import { pearsonCorrelation, returns, correlationMatrix, btcDominanceProxy, ethBtcRatio, detectRedundantSignals, analyzeCorrelation } from './correlation.js';
 import { openPosition, closePosition, checkBreakeven, checkTrailingStop, checkPartialProfit, checkEarlyClose, checkSLTP, getOpenPositions, canOpenPosition, managePosition, calculatePositionSize, riskReward, getPositionStats } from './position.js';
+import { analyzeFundingRate, analyzeOpenInterest, analyzeLongShortRatio, fundingScore } from './funding.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 
 // ── RISK MODULE ──────────────────────────────────────────────────
@@ -1029,5 +1030,100 @@ describe('Position Management', () => {
     const stats = getPositionStats();
     assert.ok(typeof stats.openPositions === 'number');
     assert.ok(typeof stats.totalPnl === 'number');
+  });
+});
+
+// ── FUNDING RATE & OPEN INTEREST ─────────────────────────────
+describe('Funding Rate', () => {
+  it('analyzeFundingRate handles null', () => {
+    const result = analyzeFundingRate(null, 'LONG');
+    assert.equal(result.score, 0);
+    assert.equal(result.signal, 'neutral');
+  });
+
+  it('analyzeFundingRate penalizes high positive funding for LONG', () => {
+    const result = analyzeFundingRate(0.001, 'LONG'); // 0.1%
+    assert.ok(result.score < 0);
+    assert.equal(result.signal, 'overleveraged_long');
+    assert.ok(result.isDangerous);
+  });
+
+  it('analyzeFundingRate rewards negative funding for LONG', () => {
+    const result = analyzeFundingRate(-0.001, 'LONG'); // -0.1%
+    assert.ok(result.score > 0);
+    assert.equal(result.signal, 'overleveraged_short');
+  });
+
+  it('analyzeFundingRate neutral zone', () => {
+    const result = analyzeFundingRate(0.0001, 'LONG'); // 0.01%
+    assert.equal(result.score, 0);
+    assert.equal(result.signal, 'neutral');
+  });
+});
+
+describe('Open Interest', () => {
+  it('analyzeOpenInterest handles null', () => {
+    const result = analyzeOpenInterest(null, null, null);
+    assert.equal(result.score, 0);
+  });
+
+  it('analyzeOpenInterest detects strong uptrend', () => {
+    const result = analyzeOpenInterest(1000, 10, 2); // OI +10%, price +2%
+    assert.ok(result.score > 0);
+    assert.equal(result.signal, 'strong_uptrend');
+  });
+
+  it('analyzeOpenInterest detects potential squeeze', () => {
+    const result = analyzeOpenInterest(1000, 10, -2); // OI +10%, price -2%
+    assert.ok(result.score > 0);
+    assert.equal(result.signal, 'potential_squeeze');
+  });
+
+  it('analyzeOpenInterest detects capitulation', () => {
+    const result = analyzeOpenInterest(1000, -10, -2); // OI -10%, price -2%
+    assert.ok(result.score > 0);
+    assert.equal(result.signal, 'capitulation');
+  });
+});
+
+describe('Long/Short Ratio', () => {
+  it('analyzeLongShortRatio handles null', () => {
+    const result = analyzeLongShortRatio(null, 'LONG');
+    assert.equal(result.score, 0);
+  });
+
+  it('analyzeLongShortRatio penalizes extreme long for LONG', () => {
+    const result = analyzeLongShortRatio(2.5, 'LONG');
+    assert.ok(result.score < 0);
+    assert.equal(result.signal, 'extreme_long');
+    assert.ok(result.isExtreme);
+  });
+
+  it('analyzeLongShortRatio rewards extreme short for LONG', () => {
+    const result = analyzeLongShortRatio(0.4, 'LONG');
+    assert.ok(result.score > 0);
+    assert.equal(result.signal, 'extreme_short');
+  });
+
+  it('analyzeLongShortRatio balanced', () => {
+    const result = analyzeLongShortRatio(1.0, 'LONG');
+    assert.equal(result.score, 0);
+    assert.equal(result.signal, 'balanced');
+  });
+});
+
+describe('Combined Funding Score', () => {
+  it('fundingScore returns valid structure', () => {
+    const result = fundingScore(0.001, 1000, 10, 2, 2.5, 'LONG');
+    assert.ok(typeof result.score === 'number');
+    assert.ok(result.funding);
+    assert.ok(result.oi);
+    assert.ok(result.lsr);
+    assert.ok(['low', 'medium', 'high'].includes(result.liquidationRisk));
+  });
+
+  it('fundingScore detects high risk', () => {
+    const result = fundingScore(0.001, 1000, 10, 2, 2.5, 'LONG');
+    assert.equal(result.liquidationRisk, 'high');
   });
 });
