@@ -267,6 +267,7 @@ import { LogisticClassifier, extractFeatures, FEATURE_NAMES } from './ml.js';
 import { monteCarloSimulation, robustnessScore } from './monte.js';
 import { marketToState, chooseAction, agentPredict, trainFromHistory, getAgentStats, exportQTable, resetAgent } from './agent.js';
 import { detectBOS, detectOrderBlocks, detectFVG, detectLiquidityZones, priceInZone, detectPullback, analyzeStructure, checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
+import { getSeasonality, getWeeklyCycle, getHourlyCycle, getBitcoinCycle, detectVolumeRotation, timeFactorScore, fullCycleMap } from './cycles.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 
 // ── RISK MODULE ──────────────────────────────────────────────────
@@ -726,5 +727,130 @@ describe('Dynamic Score', () => {
     }));
     const result = getDynamicMinScore(70, candles);
     assert.ok(result.minScore >= 70);
+  });
+});
+
+// ── CYCLES (TIME-BASED) ─────────────────────────────────────
+describe('Seasonality', () => {
+  it('getSeasonality returns valid bias', () => {
+    const result = getSeasonality('BTCUSDT', 1);
+    assert.ok(typeof result.bias === 'number');
+    assert.ok(result.bias >= -1 && result.bias <= 1);
+    assert.ok(typeof result.label === 'string');
+  });
+
+  it('getSeasonality uses DEFAULT for unknown symbol', () => {
+    const result = getSeasonality('UNKNOWN', 10);
+    assert.ok(typeof result.bias === 'number');
+  });
+
+  it('September is bearish for BTC', () => {
+    const result = getSeasonality('BTCUSDT', 9);
+    assert.ok(result.bias < 0);
+  });
+
+  it('November is bullish for BTC', () => {
+    const result = getSeasonality('BTCUSDT', 11);
+    assert.ok(result.bias > 0);
+  });
+});
+
+describe('Weekly Cycle', () => {
+  it('getWeeklyCycle returns valid structure', () => {
+    const result = getWeeklyCycle(new Date());
+    assert.ok(typeof result.volume === 'number');
+    assert.ok(typeof result.label === 'string');
+    assert.ok(typeof result.day === 'number');
+  });
+
+  it('Sunday has low volume', () => {
+    const result = getWeeklyCycle(new Date('2026-06-28')); // Sunday
+    assert.ok(result.volume < 1);
+  });
+
+  it('Thursday has high volume', () => {
+    const result = getWeeklyCycle(new Date('2026-06-25')); // Thursday
+    assert.ok(result.volume >= 1);
+  });
+});
+
+describe('Hourly Cycle', () => {
+  it('getHourlyCycle returns valid structure', () => {
+    const result = getHourlyCycle(12);
+    assert.ok(typeof result.volatility === 'number');
+    assert.ok(typeof result.label === 'string');
+  });
+
+  it('3am is dead', () => {
+    const result = getHourlyCycle(3);
+    assert.ok(result.volatility < 0.5);
+  });
+
+  it('10am has high volatility', () => {
+    const result = getHourlyCycle(10);
+    assert.ok(result.volatility >= 1);
+  });
+});
+
+describe('Bitcoin Cycle', () => {
+  it('getBitcoinCycle returns valid structure', () => {
+    const result = getBitcoinCycle(3);
+    assert.ok(typeof result.bias === 'number');
+    assert.ok(typeof result.label === 'string');
+  });
+
+  it('Post-halving phase is bullish', () => {
+    const result = getBitcoinCycle(2);
+    assert.ok(result.bias > 0);
+  });
+
+  it('Bear market phase is bearish', () => {
+    const result = getBitcoinCycle(40);
+    assert.ok(result.bias < 0);
+  });
+
+  it('Handles null monthsSinceHalving', () => {
+    const result = getBitcoinCycle(null);
+    assert.ok(result.bias === 0);
+  });
+});
+
+describe('Volume Rotation', () => {
+  it('detectVolumeRotation returns null for insufficient data', () => {
+    assert.equal(detectVolumeRotation({}), null);
+  });
+
+  it('detectVolumeRotation detects rotation', () => {
+    const candlesBySymbol = {
+      BTCUSDT: genCandles(30),
+      ETHUSDT: genCandles(30),
+    };
+    // Add high recent volume to ETH
+    for (let i = 25; i < 30; i++) {
+      candlesBySymbol.ETHUSDT[i].volume = 10000;
+    }
+    const result = detectVolumeRotation(candlesBySymbol);
+    assert.ok(result);
+    assert.ok(typeof result.isRotating === 'boolean');
+    assert.ok(typeof result.target === 'string');
+  });
+});
+
+describe('Time Factor Score', () => {
+  it('timeFactorScore returns valid structure', () => {
+    const candles = genCandles(100);
+    const result = timeFactorScore('BTCUSDT', candles);
+    assert.ok(typeof result.score === 'number');
+    assert.ok(result.score >= 0 && result.score <= 100);
+    assert.ok(Array.isArray(result.reasons));
+  });
+
+  it('fullCycleMap returns complete map', () => {
+    const candles = genCandles(100);
+    const result = fullCycleMap('BTCUSDT', candles);
+    assert.ok(result.season);
+    assert.ok(result.weekly);
+    assert.ok(result.hourly);
+    assert.ok(result.timeScore);
   });
 });

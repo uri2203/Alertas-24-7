@@ -435,7 +435,7 @@ async function runCycle(config) {
       const indicators = complementaryIndicators(candlesByTF[entryTF]);
 
       // ═══ SCORING FINAL ═════════════════════════════════════════
-      const structResult = structureScore(multiTF, indicators);
+      const structResult = structureScore(multiTF, indicators, sym, candlesByTF[entryTF]);
 
       // Solo calidad 'strong' o 'elite'
       if (structResult.quality !== 'strong' && structResult.quality !== 'elite') {

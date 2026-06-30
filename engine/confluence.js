@@ -1,11 +1,12 @@
 // ═══════════════════════════════════════════════════════════════
 //  confluence.js  —  Multi-TF Confluence Engine v8.0
-//  Análisis de estructura real del mercado
+//  Análisis de estructura real del mercado + Factor Tiempo
 //  Enfoque: Velas menores construyen las mayores
 // ═══════════════════════════════════════════════════════════════
 
 import { analyzeStructure } from './structure.js';
 import { calcRSI, ema } from './signals.js';
+import { timeFactorScore, getSeasonality, getWeeklyCycle, getHourlyCycle } from './cycles.js';
 
 // ── ESTRUCTURA MULTI-TF ─────────────────────────────────────
 // El mercado se estructura así:
@@ -177,34 +178,34 @@ export function complementaryIndicators(candles) {
 }
 
 // ── SCORING FINAL ESTRUCTURA (0-100) ────────────────────────
-// Sistema de scoring basado en ESTRUCTURA, no en indicadores genéricos
-export function structureScore(multiTF, indicators) {
+// Sistema de scoring basado en ESTRUCTURA + FACTOR TIEMPO
+export function structureScore(multiTF, indicators, symbol, entryCandles) {
   if (!multiTF) return { score: 0, maxScore: 100, quality: 'none', reasons: [] };
 
   let score = 0;
   const reasons = [];
 
-  // ═══ ESTRUCTURA (60 pts) ══════════════════════════════════
+  // ═══ ESTRUCTURA (50 pts) ══════════════════════════════════
   const s = multiTF.score;
 
-  // 1. Confluencia multi-TF (30 pts)
-  const confluencePts = Math.round((s / 100) * 30);
+  // 1. Confluencia multi-TF (25 pts)
+  const confluencePts = Math.round((s / 100) * 25);
   score += confluencePts;
-  if (confluencePts >= 20) reasons.push('confluencia_multi_tf');
+  if (confluencePts >= 18) reasons.push('confluencia_multi_tf');
 
-  // 2. Pullback a zona de interés (15 pts)
+  // 2. Pullback a zona de interés (12 pts)
   if (multiTF.pullbackSetup) {
-    score += 10;
+    score += 8;
     reasons.push(`pullback_${multiTF.pullbackSetup.zone}`);
     if (multiTF.pullbackSetup.reaction) {
-      score += 5;
+      score += 4;
       reasons.push('vela_reaccion');
     }
   }
 
-  // 3. BOS en dirección correcta (10 pts)
+  // 3. BOS en dirección correcta (8 pts)
   if (multiTF.entryConfirmation?.bos) {
-    score += 10;
+    score += 8;
     reasons.push(`bos_${multiTF.entryConfirmation.bos}`);
   }
 
@@ -212,57 +213,79 @@ export function structureScore(multiTF, indicators) {
   if (multiTF.entryConfirmation?.inOB) { score += 3; reasons.push('en_order_block'); }
   if (multiTF.entryConfirmation?.inFVG) { score += 2; reasons.push('en_fvg'); }
 
-  // ═══ CONFIRMACIÓN (40 pts) ════════════════════════════════
+  // ═══ CONFIRMACIÓN (30 pts) ════════════════════════════════
   if (indicators) {
-    // 5. RSI no sobrecompra/sobreventa (10 pts)
+    // 5. RSI no sobrecompra/sobreventa (8 pts)
     if (indicators.rsi != null) {
       if (multiTF.macroDirection === 'bullish' && indicators.rsi < 70 && indicators.rsi > 30) {
-        score += 10;
+        score += 8;
         reasons.push('rsi_neutral');
       } else if (multiTF.macroDirection === 'bearish' && indicators.rsi > 30 && indicators.rsi < 70) {
-        score += 10;
+        score += 8;
         reasons.push('rsi_neutral');
       } else if (indicators.rsi < 30 || indicators.rsi > 70) {
-        // Sobrecompra/sobreventa puede ser buena en pullback
-        score += 5;
+        score += 4;
         reasons.push('rsi_extremo_pullback');
       }
     }
 
-    // 6. Volumen confirma (10 pts)
+    // 6. Volumen confirma (8 pts)
     if (indicators.volumeConfirm) {
-      score += 10;
+      score += 8;
       reasons.push('volumen_confirmado');
     } else if (indicators.volRatio > 1.0) {
-      score += 5;
+      score += 4;
       reasons.push('volumen_normal');
     }
 
-    // 7. EMA alineación (10 pts)
+    // 7. EMA alineación (8 pts)
     if (multiTF.macroDirection === 'bullish' && indicators.priceAboveEMA20 && indicators.ema20Above50) {
-      score += 10;
+      score += 8;
       reasons.push('ema_alineada_alcista');
     } else if (multiTF.macroDirection === 'bearish' && !indicators.priceAboveEMA20 && !indicators.ema20Above50) {
-      score += 10;
+      score += 8;
       reasons.push('ema_alineada_bajista');
-    } else if (indicators.priceAboveEMA20 || !indicators.priceAboveEMA20) {
-      score += 3;
+    } else {
+      score += 2;
     }
 
-    // 8. Momentum a favor (5 pts)
+    // 8. Momentum a favor (3 pts)
     if (multiTF.macroDirection === 'bullish' && indicators.momentum > 0) {
-      score += 5;
+      score += 3;
       reasons.push('momentum_alcista');
     } else if (multiTF.macroDirection === 'bearish' && indicators.momentum < 0) {
-      score += 5;
+      score += 3;
       reasons.push('momentum_bajista');
     }
 
-    // 9. Volatilidad razonable (5 pts)
+    // 9. Volatilidad razonable (3 pts)
     if (indicators.atrPct > 0.3 && indicators.atrPct < 3.0) {
-      score += 5;
+      score += 3;
       reasons.push('volatilidad_ok');
     }
+  }
+
+  // ═══ FACTOR TIEMPO (20 pts) ══════════════════════════════
+  if (symbol && entryCandles) {
+    const timeScore = timeFactorScore(symbol, entryCandles);
+
+    // 10. Estacionalidad (±10 pts)
+    const seasonPts = Math.round(timeScore.season.bias * 10);
+    score += seasonPts;
+    if (seasonPts > 0) reasons.push(`estacional_${timeScore.season.label}`);
+    else if (seasonPts < 0) reasons.push(`estacional_${timeScore.season.label}`);
+
+    // 11. Ciclo semanal (±5 pts)
+    const weeklyPts = Math.round((timeScore.weekly.volume - 1) * 5);
+    score += weeklyPts;
+    if (timeScore.weekly.label === 'alta_liquidez') reasons.push('alta_liquidez_hoy');
+    else if (timeScore.weekly.label === 'muerto') reasons.push('bajo_volumen_hoy');
+
+    // 12. Ciclo horario (±5 pts)
+    const hourlyPts = Math.round((timeScore.hourly.volatility - 0.7) * 5);
+    score += hourlyPts;
+    if (timeScore.hourly.label === 'alta_volatilidad') reasons.push('hora_alta_volatilidad');
+    else if (timeScore.hourly.label === 'muerto') reasons.push('hora_muerta');
   }
 
   // ═══ PENALIZACIONES ═══════════════════════════════════════
