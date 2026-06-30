@@ -54,7 +54,22 @@
 <body>
 
 <h1>📊 Estadísticas de Señales</h1>
-<p class="sub">Trading Dashboard PRO v7.2 — Tracker automático con backtesting</p>
+<p class="sub">Trading Dashboard PRO v8.0 — Tracker automático con backtesting + AI</p>
+
+<!-- LOGIN -->
+<div id="LOGIN-BOX" style="display:none">
+  <div class="bt-panel" style="border-color:#3d7eff;max-width:400px;margin:40px auto">
+    <h3 style="color:#3d7eff">🔐 Acceso</h3>
+    <div class="bt-row">
+      <input class="bt-input" id="LOGIN-PASS" type="password" placeholder="Contraseña" style="flex:1" onkeydown="if(event.key==='Enter')doLogin()">
+      <button class="bt-btn" onclick="doLogin()" style="background:#3d7eff">Entrar</button>
+    </div>
+    <div class="bt-status" id="LOGIN-STATUS" style="margin-top:8px"></div>
+  </div>
+</div>
+
+<!-- MAIN CONTENT (hidden until auth) -->
+<div id="MAIN-CONTENT" style="display:none">
 
 <button class="refresh" onclick="load()">↺ Actualizar</button>
 
@@ -134,10 +149,65 @@
 
 <div id="CONTENT"><div class="loading">Cargando estadísticas...</div></div>
 <div id="BT-RESULTS"></div>
+</div><!-- /MAIN-CONTENT -->
 
 <script>
+let sessionToken = sessionStorage.getItem('tdp-session');
 const fp = v => !v || isNaN(v) ? '—' : v > 100 ? v.toLocaleString('en-US', {maximumFractionDigits:0}) : v.toFixed(4);
 const pct = v => v != null ? `${v}%` : '—';
+
+function authHeaders() {
+  return sessionToken ? { 'x-session-token': sessionToken } : {};
+}
+
+async function doLogin() {
+  const pass = document.getElementById('LOGIN-PASS').value;
+  const st = document.getElementById('LOGIN-STATUS');
+  st.textContent = 'Entrando...';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pass }),
+    });
+    const d = await r.json();
+    if (d.ok && d.token) {
+      sessionToken = d.token;
+      sessionStorage.setItem('tdp-session', d.token);
+      document.getElementById('LOGIN-BOX').style.display = 'none';
+      document.getElementById('MAIN-CONTENT').style.display = 'block';
+      init();
+    } else {
+      st.textContent = '❌ Contraseña incorrecta';
+    }
+  } catch (e) { st.textContent = '❌ ' + e.message; }
+}
+
+function checkAuth() {
+  if (sessionToken) {
+    fetch('/api/tracker', { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          document.getElementById('LOGIN-BOX').style.display = 'none';
+          document.getElementById('MAIN-CONTENT').style.display = 'block';
+          init();
+        } else {
+          sessionStorage.removeItem('tdp-session');
+          sessionToken = null;
+          showLogin();
+        }
+      })
+      .catch(() => showLogin());
+  } else {
+    showLogin();
+  }
+}
+
+function showLogin() {
+  document.getElementById('LOGIN-BOX').style.display = 'block';
+  document.getElementById('MAIN-CONTENT').style.display = 'none';
+}
 
 function pctColor(v) {
   if (v == null) return 'neu';
@@ -157,7 +227,7 @@ async function load() {
   const el = document.getElementById('CONTENT');
   el.innerHTML = '<div class="loading">Cargando...</div>';
   try {
-    const res  = await fetch('/api/tracker');
+    const res  = await fetch('/api/tracker', { headers: authHeaders() });
     const data = await res.json();
 
     if (!data.ok || data.total === 0) {
@@ -320,11 +390,6 @@ async function load() {
   }
 }
 
-load();
-loadAgentStats();
-setInterval(load, 60000);
-setInterval(loadAgentStats, 60000);
-
 // ── BACKTEST ──────────────────────────────────────────────
 async function runBacktest() {
   const sym = document.getElementById('BT-SYM').value;
@@ -341,7 +406,7 @@ async function runBacktest() {
   try {
     const r = await fetch('/api/backtest', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ symbol: sym, tf, lookback: lb }),
     });
     const d = await r.json();
@@ -612,7 +677,7 @@ async function runBacktest() {
 // Cargar resultados existentes
 async function loadBacktestResults() {
   try {
-    const r = await fetch('/api/backtest');
+    const r = await fetch('/api/backtest', { headers: authHeaders() });
     const d = await r.json();
     if (d.ok && d.results && d.results.length) {
       const el = document.getElementById('BT-RESULTS');
@@ -654,7 +719,7 @@ async function runOptimizer() {
   try {
     const r = await fetch('/api/optimizer/run', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ symbol: sym, tf, popSize: pop, generations: gen }),
     });
     const d = await r.json();
@@ -687,7 +752,7 @@ async function runMonteCarlo() {
   try {
     const r = await fetch('/api/backtest/monte', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ symbol: sym, tf, iterations: iter }),
     });
     const d = await r.json();
@@ -717,7 +782,7 @@ async function runMonteCarlo() {
 // ── RL AGENT ────────────────────────────────────────────────────
 async function loadAgentStats() {
   try {
-    const r = await fetch('/api/agent');
+    const r = await fetch('/api/agent', { headers: authHeaders() });
     const d = await r.json();
     const s = d.stats;
     const st = document.getElementById('AGENT-INFO');
@@ -741,7 +806,7 @@ async function agentSave() {
   const st = document.getElementById('AGENT-STATUS');
   st.textContent = 'Guardando Q-Table...';
   try {
-    const r = await fetch('/api/agent/save', { method: 'POST' });
+    const r = await fetch('/api/agent/save', { method: 'POST', headers: authHeaders() });
     const d = await r.json();
     st.textContent = d.ok ? `✅ Guardada (${d.states} estados)` : '❌ Error';
   } catch (e) { st.textContent = '❌ ' + e.message; }
@@ -752,12 +817,23 @@ async function agentReset() {
   const st = document.getElementById('AGENT-STATUS');
   st.textContent = 'Reiniciando...';
   try {
-    const r = await fetch('/api/agent/reset', { method: 'POST' });
+    const r = await fetch('/api/agent/reset', { method: 'POST', headers: authHeaders() });
     const d = await r.json();
     st.textContent = d.ok ? '✅ Reiniciado' : '❌ Error';
     loadAgentStats();
   } catch (e) { st.textContent = '❌ ' + e.message; }
 }
+
+// ── INIT ────────────────────────────────────────────────────────
+function init() {
+  load();
+  loadAgentStats();
+  setInterval(load, 60000);
+  setInterval(loadAgentStats, 60000);
+}
+
+// ── STARTUP ─────────────────────────────────────────────────────
+checkAuth();
 </script>
 </body>
 </html>
