@@ -121,6 +121,17 @@
   <div class="bt-status" id="MC-STATUS"></div>
 </div>
 
+<!-- RL AGENT PANEL -->
+<div class="bt-panel" style="border-color:#10b981">
+  <h3 style="color:#10b981">🧠 RL Agent (Q-Learning)</h3>
+  <div id="AGENT-INFO">Cargando...</div>
+  <div class="bt-row">
+    <button class="bt-btn" onclick="agentSave()" style="background:#10b981;color:#000">💾 Guardar Q-Table</button>
+    <button class="bt-btn" onclick="agentReset()" style="background:#ef4444;color:#fff">🔄 Reiniciar</button>
+  </div>
+  <div class="bt-status" id="AGENT-STATUS"></div>
+</div>
+
 <div id="CONTENT"><div class="loading">Cargando estadísticas...</div></div>
 <div id="BT-RESULTS"></div>
 
@@ -310,7 +321,9 @@ async function load() {
 }
 
 load();
+loadAgentStats();
 setInterval(load, 60000);
+setInterval(loadAgentStats, 60000);
 
 // ── BACKTEST ──────────────────────────────────────────────
 async function runBacktest() {
@@ -699,6 +712,51 @@ async function runMonteCarlo() {
 
   btn.disabled = false;
   btn.textContent = '▶ Simular';
+}
+
+// ── RL AGENT ────────────────────────────────────────────────────
+async function loadAgentStats() {
+  try {
+    const r = await fetch('/api/agent');
+    const d = await r.json();
+    const s = d.stats;
+    const st = document.getElementById('AGENT-INFO');
+    st.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card"><div class="stat-val">${s.episodes}</div><div class="stat-label">Episodios</div></div>
+        <div class="stat-card"><div class="stat-val">${s.statesExplored}</div><div class="stat-label">Estados Explorados</div></div>
+        <div class="stat-card"><div class="stat-val">${s.explorationPct.toFixed(1)}%</div><div class="stat-label">Exploración</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card"><div class="stat-val ${s.avgReward >= 0 ? 'pnl-pos' : 'pnl-neg'}">${s.avgReward >= 0 ? '+' : ''}${s.avgReward.toFixed(4)}</div><div class="stat-label">Reward Promedio</div></div>
+        <div class="stat-card"><div class="stat-val">${s.currentEpsilon.toFixed(3)}</div><div class="stat-label">Epsilon Actual</div></div>
+        <div class="stat-card"><div class="stat-val">${s.qTableSize}</div><div class="stat-label">Q-Table Size</div></div>
+        <div class="stat-card"><div class="stat-val">${d.hasQTable ? '✅' : '❌'}</div><div class="stat-label">Guardado</div></div>
+      </div>
+    `;
+  } catch {}
+}
+
+async function agentSave() {
+  const st = document.getElementById('AGENT-STATUS');
+  st.textContent = 'Guardando Q-Table...';
+  try {
+    const r = await fetch('/api/agent/save', { method: 'POST' });
+    const d = await r.json();
+    st.textContent = d.ok ? `✅ Guardada (${d.states} estados)` : '❌ Error';
+  } catch (e) { st.textContent = '❌ ' + e.message; }
+}
+
+async function agentReset() {
+  if (!confirm('¿Reiniciar agente RL? Se perderá todo el aprendizaje.')) return;
+  const st = document.getElementById('AGENT-STATUS');
+  st.textContent = 'Reiniciando...';
+  try {
+    const r = await fetch('/api/agent/reset', { method: 'POST' });
+    const d = await r.json();
+    st.textContent = d.ok ? '✅ Reiniciado' : '❌ Error';
+    loadAgentStats();
+  } catch (e) { st.textContent = '❌ ' + e.message; }
 }
 </script>
 </body>

@@ -9,6 +9,7 @@ import { detectRegime, regimeScoreAdjustment } from './regime.js';
 import { extractFeatures, LogisticClassifier } from './ml.js';
 import { calcPositionSize, kellyFraction } from './risk.js';
 import { geneticOptimize } from './optimizer.js';
+import { agentPredict, trainFromHistory, getAgentStats, exportQTable, importQTable } from './agent.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -30,6 +31,7 @@ export const STATE = {
   ml:           { trained: false, confidence: 0, filtered: 0, total: 0, correct: 0 },
   regime:       { trending: 0, ranging: 0, volatile: 0, blocked: 0 },
   optimizer:    { optimized: 0, lastRun: null },
+  agent:        { trained: false, decisions: 0, skipped: 0, traded: 0 },
   optimizedParams: {}, // { 'BTCUSDT-1h': { wEma: 1.2, ... } }
 };
 
@@ -225,6 +227,83 @@ async function trainMLClassifier(config) {
   } else {
     console.log(`[ML] Insuficientes muestras (${totalSamples}). ML desactivado.`);
   }
+
+  // ── ENTRENAR RL AGENT ──────────────────────────────────────────
+  console.log('[AGENT] Entrenando agente RL con historial...');
+  try {
+    // Recopilar trades historicos para entrenar al agente
+    const allTrades = [];
+    const candlesCache = {};
+    for (const sym of config.symbols) {
+      for (const tf of config.tfs) {
+        const key = `${sym}-${tf}`;
+        try {
+          const candles = await fetchCandles(sym, tf, 500);
+          if (!candles || candles.length < 200) continue;
+          candlesCache[key] = candles;
+
+          // Simular señales históricas para generar training data
+          const WINDOW = 200;
+          for (let i = WINDOW; i < candles.length - 50; i += 10) {
+            const window = candles.slice(0, i + 1);
+            const sig = await scoreSignal(window, tf, TF_CONFIG);
+            if (!sig || sig.signal === 'WAIT') continue;
+
+            const entryPrice = candles[i].close;
+            const atr = sig.atr || 1;
+            const future = candles.slice(i + 1, i + 51);
+            if (future.length < 10) continue;
+
+            let won = false;
+            const sl = sig.signal === 'LONG' ? entryPrice - atr * 2 : entryPrice + atr * 2;
+            const tp = sig.signal === 'LONG' ? entryPrice + atr * 2 : entryPrice - atr * 2;
+
+            for (const fc of future) {
+              if (sig.signal === 'LONG') {
+                if (fc.low <= sl) { won = false; break; }
+                if (fc.high >= tp) { won = true; break; }
+              } else {
+                if (fc.high >= sl) { won = false; break; }
+                if (fc.low <= tp) { won = true; break; }
+              }
+            }
+            if (!future.some(fc =>
+              (sig.signal === 'LONG' && (fc.low <= sl || fc.high >= tp)) ||
+              (sig.signal === 'SHORT' && (fc.high >= sl || fc.low <= tp))
+            )) {
+              const lastPrice = future[future.length - 1].close;
+              won = sig.signal === 'LONG' ? lastPrice > entryPrice : lastPrice < entryPrice;
+            }
+
+            allTrades.push({
+              sym, tf,
+              entryTime: candles[i].time,
+              result: won ? 'WIN' : 'LOSS',
+              pnl: won ? 0.02 : -0.01,
+            });
+          }
+          await new Promise(r => setTimeout(r, 300));
+        } catch {}
+      }
+    }
+
+    // Entrenar agente
+    const agentResult = trainFromHistory(allTrades, candlesCache);
+    if (agentResult) {
+      STATE.agent.trained = true;
+      console.log(`[AGENT] Entrenado: ${agentResult.episodes} episodes, skip=${agentResult.skipAccuracy}%, trade=${agentResult.tradeAccuracy}%`);
+    }
+
+    // Cargar Q-table guardada si existe
+    const qTablePath = join(DATA_DIR, 'agent-qtable.json');
+    if (existsSync(qTablePath)) {
+      const data = JSON.parse(readFileSync(qTablePath, 'utf8'));
+      importQTable(data);
+      console.log(`[AGENT] Q-table cargada: ${data.episodeCount} episodes`);
+    }
+  } catch (e) {
+    console.error('[AGENT] Error entrenando:', e.message);
+  }
 }
 
 // ── AUTO-OPTIMIZER: optimizar parametros periodicamente ───────────
@@ -354,6 +433,21 @@ async function runCycle(config) {
         }
         sentThisCycle.set(groupKey, { dir: sig.dir, score: sig.score, sym, tf });
 
+        // ── RL AGENT: decides si operar o no ─────────────────────
+        STATE.agent.decisions++;
+        if (STATE.agent.trained) {
+          const agentDec = agentPredict(candles);
+          sig.agentDecision = agentDec;
+
+          if (agentDec.action === 'SKIP') {
+            STATE.agent.skipped++;
+            console.log(`   [AGENT] ${sym} ${tf} SKIP (conf: ${(agentDec.confidence * 100).toFixed(0)}%, Q-trade: ${agentDec.qTrade}, Q-skip: ${agentDec.qSkip})`);
+            continue;
+          }
+          STATE.agent.traded++;
+          console.log(`   [AGENT] ${sym} ${tf} TRADE APROBADO (conf: ${(agentDec.confidence * 100).toFixed(0)}%)`);
+        }
+
         activeThisCycle.add(key);
         const isDivergence = sig.divValid && sig.divergence;
         STATE.signals[key] = {
@@ -400,7 +494,18 @@ async function runCycle(config) {
 
   STATE.isScanning = false;
   const mlAvg = STATE.ml.total > 0 ? (STATE.ml.confidence / STATE.ml.total * 100).toFixed(1) : 0;
-  console.log(`[SCAN #${STATE.scanCount}] OK. Senales: ${Object.keys(STATE.signals).length} | ML: ${STATE.ml.filtered}/${STATE.ml.total} filtradas (${mlAvg}% avg) | Regime blocked: ${STATE.regime.blocked}`);
+  const agentInfo = STATE.agent.trained
+    ? ` | Agent: ${STATE.agent.traded} traded, ${STATE.agent.skipped} skipped`
+    : '';
+  console.log(`[SCAN #${STATE.scanCount}] OK. Senales: ${Object.keys(STATE.signals).length} | ML: ${STATE.ml.filtered}/${STATE.ml.total} filtradas (${mlAvg}% avg) | Regime blocked: ${STATE.regime.blocked}${agentInfo}`);
+
+  // Guardar Q-table cada 10 ciclos
+  if (STATE.scanCount % 10 === 0 && STATE.agent.trained) {
+    try {
+      const qTablePath = join(DATA_DIR, 'agent-qtable.json');
+      writeFileSync(qTablePath, JSON.stringify(exportQTable()), 'utf8');
+    } catch {}
+  }
 }
 
 // ── INICIO ───────────────────────────────────────────────────────

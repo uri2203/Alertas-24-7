@@ -25,19 +25,22 @@ export function buildAlertMessage(sym, tf, sig, isDivergence = false) {
       : `\n⚠️ <b>Divergencia detectada pero SIN confirmación:</b> ${sig.divergence === 'bullish' ? '🟢 Alcista' : '🔴 Bajista'} (requiere MACD+ADX)`
     : '';
 
-  // ML + Regime info
+  // ML + Regime + Agent info
   const mlLine = sig.mlConfidence
     ? `\n🤖 <b>ML Confidence:</b> ${(sig.mlConfidence * 100).toFixed(0)}%`
     : '';
   const regimeLine = sig.regime
     ? `\n📊 <b>Régimen:</b> ${sig.regime}${sig.regimeConfidence ? ` (${(sig.regimeConfidence * 100).toFixed(0)}%)` : ''}`
     : '';
+  const agentLine = sig.agentDecision
+    ? `\n🧠 <b>RL Agent:</b> ${sig.agentDecision.action} (${(sig.agentDecision.confidence * 100).toFixed(0)}%)`
+    : '';
 
   return `${header}
 
 🕐 <b>Hora MX:</b> ${time}
 📊 <b>Score:</b> ${sig.score}/${sig.max} (ponderado)
-${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${divLine}${mlLine}${regimeLine}
+${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${divLine}${mlLine}${regimeLine}${agentLine}
 
 💰 <b>Niveles de operación:</b>
   • Entrada:  <code>${fp(sig.entry)}</code>

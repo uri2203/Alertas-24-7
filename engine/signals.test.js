@@ -265,6 +265,7 @@ import { kellyFraction, calcPositionSize, checkMaxDrawdown, calcExpectancy, maxC
 import { detectRegimeADX, detectRegimeVolatility, detectRegimeTrend, detectRegime, regimeScoreAdjustment } from './regime.js';
 import { LogisticClassifier, extractFeatures, FEATURE_NAMES } from './ml.js';
 import { monteCarloSimulation, robustnessScore } from './monte.js';
+import { marketToState, chooseAction, agentPredict, trainFromHistory, getAgentStats, exportQTable, resetAgent } from './agent.js';
 
 // ── RISK MODULE ──────────────────────────────────────────────────
 describe('Risk Management', () => {
@@ -437,5 +438,66 @@ describe('Monte Carlo', () => {
     const mc = monteCarloSimulation(trades, { iterations: 500 });
     const score = robustnessScore(mc);
     assert.ok(score >= 0 && score <= 100);
+  });
+});
+
+// ── RL AGENT ─────────────────────────────────────────────────────
+describe('RL Agent', () => {
+  it('marketToState returns valid state 0-1023', () => {
+    const candles = genCandles(250);
+    const state = marketToState(candles);
+    assert.ok(state >= 0 && state < 1024);
+  });
+
+  it('marketToState returns 0 for insufficient data', () => {
+    assert.equal(marketToState(genCandles(50)), 0);
+  });
+
+  it('chooseAction returns 0 or 1', () => {
+    resetAgent();
+    for (let i = 0; i < 10; i++) {
+      const action = chooseAction(Math.floor(Math.random() * 1024), 0.5);
+      assert.ok(action === 0 || action === 1);
+    }
+  });
+
+  it('agentPredict returns valid structure', () => {
+    resetAgent();
+    const candles = genCandles(250);
+    const pred = agentPredict(candles);
+    assert.ok(pred);
+    assert.ok(pred.action === 'TRADE' || pred.action === 'SKIP');
+    assert.ok(typeof pred.confidence === 'number');
+    assert.ok(typeof pred.state === 'number');
+  });
+
+  it('trainFromHistory returns stats', () => {
+    resetAgent();
+    const trades = Array.from({ length: 20 }, (_, i) => ({
+      sym: 'BTCUSDT', tf: '1h',
+      entryTime: 1000 + i * 100,
+      result: i % 2 === 0 ? 'WIN' : 'LOSS',
+      pnl: i % 2 === 0 ? 0.02 : -0.01,
+    }));
+    const candlesCache = { 'BTCUSDT-1h': genCandles(300) };
+    const result = trainFromHistory(trades, candlesCache);
+    assert.ok(result);
+    assert.ok(result.episodes > 0);
+    assert.ok(typeof result.avgReward === 'number');
+  });
+
+  it('getAgentStats returns valid stats', () => {
+    const stats = getAgentStats();
+    assert.ok(stats);
+    assert.ok(typeof stats.episodes === 'number');
+    assert.ok(typeof stats.statesExplored === 'number');
+    assert.ok(typeof stats.explorationPct === 'number');
+  });
+
+  it('exportQTable returns serializable data', () => {
+    const data = exportQTable();
+    assert.ok(data.qTable);
+    assert.ok(Array.isArray(data.qTable));
+    assert.ok(data.qTable.length > 0);
   });
 });

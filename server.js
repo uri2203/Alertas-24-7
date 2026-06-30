@@ -20,7 +20,8 @@ import { trackerRouter }   from './routes/tracker.js';
 import { drawingsRouter }  from './routes/drawings.js';
 import { backtestRouter }  from './routes/backtest.js';
 import { optimizerRouter } from './routes/optimizer.js';
-import { startScanner }    from './engine/scanner.js';
+import agentRouter from './routes/agent.js';
+import { startScanner } from './engine/scanner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -129,7 +130,8 @@ app.use('/api/telegram',  requireAuth, tgLimiter, alertsRouter(CONFIG));
 app.use('/api/tracker',   requireAuth, trackerRouter());
 app.use('/api/drawings',  requireAuth, drawingsRouter());
 app.use('/api/backtest',  requireAuth, backtestRouter());
-app.use('/api/optimizer', requireAuth, optimizerRouter());
+  app.use('/api/optimizer', requireAuth, optimizerRouter());
+  app.use('/api/agent',    requireAuth, agentRouter());
 
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
