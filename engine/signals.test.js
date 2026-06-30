@@ -268,6 +268,8 @@ import { monteCarloSimulation, robustnessScore } from './monte.js';
 import { marketToState, chooseAction, agentPredict, trainFromHistory, getAgentStats, exportQTable, resetAgent } from './agent.js';
 import { detectBOS, detectOrderBlocks, detectFVG, detectLiquidityZones, priceInZone, detectPullback, analyzeStructure, checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
 import { getSeasonality, getWeeklyCycle, getHourlyCycle, getBitcoinCycle, detectVolumeRotation, timeFactorScore, fullCycleMap } from './cycles.js';
+import { pearsonCorrelation, returns, correlationMatrix, btcDominanceProxy, ethBtcRatio, detectRedundantSignals, analyzeCorrelation } from './correlation.js';
+import { openPosition, closePosition, checkBreakeven, checkTrailingStop, checkPartialProfit, checkEarlyClose, checkSLTP, getOpenPositions, canOpenPosition, managePosition, calculatePositionSize, riskReward, getPositionStats } from './position.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 
 // ── RISK MODULE ──────────────────────────────────────────────────
@@ -852,5 +854,180 @@ describe('Time Factor Score', () => {
     assert.ok(result.weekly);
     assert.ok(result.hourly);
     assert.ok(result.timeScore);
+  });
+});
+
+// ── CORRELATION ──────────────────────────────────────────────
+describe('Correlation', () => {
+  it('pearsonCorrelation returns valid value', () => {
+    const x = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const y = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const result = pearsonCorrelation(x, y);
+    assert.ok(result >= 0.99); // Perfect correlation
+  });
+
+  it('pearsonCorrelation returns 0 for insufficient data', () => {
+    assert.equal(pearsonCorrelation([1], [1]), 0);
+  });
+
+  it('returns calculates correctly', () => {
+    const closes = [100, 105, 103, 110];
+    const result = returns(closes);
+    assert.ok(result.length === 3);
+    assert.ok(Math.abs(result[0] - 0.05) < 0.001);
+  });
+
+  it('correlationMatrix returns valid matrix', () => {
+    const candlesBySymbol = {
+      BTCUSDT: genCandles(50),
+      ETHUSDT: genCandles(50),
+    };
+    const result = correlationMatrix(candlesBySymbol);
+    assert.ok(result);
+    assert.ok(result.BTCUSDT);
+    assert.ok(result.ETHUSDT);
+    assert.equal(result.BTCUSDT.BTCUSDT, 1);
+  });
+
+  it('btcDominanceProxy returns valid structure', () => {
+    const candlesBySymbol = {
+      BTCUSDT: genCandles(50),
+      ETHUSDT: genCandles(50),
+    };
+    const result = btcDominanceProxy(candlesBySymbol);
+    assert.ok(result);
+    assert.ok(typeof result.dominance === 'number');
+    assert.ok(['btc_leading', 'altcoins_leading', 'correlated'].includes(result.regime));
+  });
+
+  it('ethBtcRatio returns valid structure', () => {
+    const candlesBySymbol = {
+      BTCUSDT: genCandles(50),
+      ETHUSDT: genCandles(50),
+    };
+    const result = ethBtcRatio(candlesBySymbol);
+    assert.ok(result);
+    assert.ok(typeof result.ratio === 'number');
+    assert.ok(typeof result.ratioChange === 'number');
+  });
+
+  it('detectRedundantSignals filters correlated signals', () => {
+    const signals = [
+      { sym: 'ETHUSDT', direction: 'LONG', score: 80 },
+      { sym: 'SOLUSDT', direction: 'LONG', score: 75 },
+    ];
+    const matrix = { ETHUSDT: { ETHUSDT: 1, SOLUSDT: 0.9 }, SOLUSDT: { ETHUSDT: 0.9, SOLUSDT: 1 } };
+    const result = detectRedundantSignals(signals, matrix);
+    assert.ok(result.length === 1);
+    assert.equal(result[0].sym, 'ETHUSDT');
+  });
+});
+
+// ── POSITION MANAGEMENT ──────────────────────────────────────
+describe('Position Management', () => {
+  it('openPosition creates position', () => {
+    const pos = openPosition('BTCUSDT', 'LONG', 100, 95, 110);
+    assert.ok(pos);
+    assert.equal(pos.status, 'open');
+    assert.equal(pos.direction, 'LONG');
+  });
+
+  it('closePosition calculates P&L correctly for LONG', () => {
+    openPosition('TEST1', 'LONG', 100, 95, 110);
+    const result = closePosition('TEST1', 105, 'take_profit');
+    assert.ok(result);
+    assert.ok(result.pnl > 0);
+    assert.equal(result.closeReason, 'take_profit');
+  });
+
+  it('closePosition calculates P&L correctly for SHORT', () => {
+    openPosition('TEST2', 'SHORT', 100, 105, 90);
+    const result = closePosition('TEST2', 95, 'take_profit');
+    assert.ok(result);
+    assert.ok(result.pnl > 0);
+  });
+
+  it('checkBreakeven moves SL when profit sufficient', () => {
+    openPosition('TEST3', 'LONG', 100, 90, 120);
+    const result = checkBreakeven('TEST3', 112); // 12% profit, risk was 10%
+    assert.ok(result);
+    assert.equal(result.action, 'breakeven');
+    assert.equal(result.newSL, 100);
+  });
+
+  it('checkTrailingStop moves SL up', () => {
+    openPosition('TEST4', 'LONG', 100, 90, 120);
+    // First move to breakeven
+    checkBreakeven('TEST4', 112);
+    // Then check trailing
+    const result = checkTrailingStop('TEST4', 115, 2);
+    assert.ok(result);
+    assert.equal(result.action, 'trailing');
+    assert.ok(result.newSL > 100);
+  });
+
+  it('checkPartialProfit takes profit at TP1', () => {
+    openPosition('TEST5', 'LONG', 100, 90, 120);
+    const result = checkPartialProfit('TEST5', 110, 110);
+    assert.ok(result);
+    assert.equal(result.action, 'partial_profit');
+  });
+
+  it('checkSLTP closes on stop loss', () => {
+    openPosition('TEST6', 'LONG', 100, 95, 110);
+    const result = checkSLTP('TEST6', 94);
+    assert.ok(result);
+    assert.equal(result.closeReason, 'stop_loss');
+  });
+
+  it('checkSLTP closes on take profit', () => {
+    openPosition('TEST7', 'LONG', 100, 95, 110);
+    const result = checkSLTP('TEST7', 111);
+    assert.ok(result);
+    assert.equal(result.closeReason, 'take_profit');
+  });
+
+  it('canOpenPosition respects limit', () => {
+    // Clean up any existing positions first
+    const existing = getOpenPositions();
+    for (const p of existing) closePosition(p.sym, p.entry);
+
+    openPosition('P1', 'LONG', 100, 95, 110);
+    openPosition('P2', 'LONG', 100, 95, 110);
+    openPosition('P3', 'LONG', 100, 95, 110);
+    const result = canOpenPosition(3);
+    assert.equal(result.canOpen, false);
+    assert.equal(result.openCount, 3);
+    // Clean up
+    closePosition('P1', 100);
+    closePosition('P2', 100);
+    closePosition('P3', 100);
+  });
+
+  it('managePosition executes full management', () => {
+    openPosition('TEST8', 'LONG', 100, 90, 120);
+    const result = managePosition('TEST8', 112, 2, null, 110);
+    assert.ok(result);
+    assert.ok(result.actions.length > 0);
+  });
+
+  it('calculatePositionSize returns valid size', () => {
+    const result = calculatePositionSize(10000, 2, 100, 95);
+    assert.ok(result);
+    assert.ok(result.size > 0);
+    assert.ok(result.riskAmount === 200);
+  });
+
+  it('riskReward returns valid ratio', () => {
+    const result = riskReward(100, 95, 110);
+    assert.ok(result);
+    assert.ok(result.ratio === 2);
+    assert.equal(result.label, 'bueno');
+  });
+
+  it('getPositionStats returns valid stats', () => {
+    const stats = getPositionStats();
+    assert.ok(typeof stats.openPositions === 'number');
+    assert.ok(typeof stats.totalPnl === 'number');
   });
 });

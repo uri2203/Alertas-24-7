@@ -12,6 +12,8 @@ import { geneticOptimize } from './optimizer.js';
 import { agentPredict, trainFromHistory, getAgentStats, exportQTable, importQTable } from './agent.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 import { checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
+import { analyzeCorrelation } from './correlation.js';
+import { canOpenPosition, managePosition, getPositionStats } from './position.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -538,6 +540,31 @@ async function runCycle(config) {
     }
   }
 
+  // ═══ ANÁLISIS DE CORRELACIÓN ════════════════════════════════════
+  // Construir candlesBySymbol para análisis de correlación
+  const candlesBySymbol = {};
+  for (const cand of candidates) {
+    if (!candlesBySymbol[cand.sym]) candlesBySymbol[cand.sym] = cand.candles;
+  }
+
+  const corrAnalysis = analyzeCorrelation(candlesBySymbol, candidates);
+  candidates = corrAnalysis.filtered;
+
+  if (corrAnalysis.dominance) {
+    console.log(`   [CORR] BTC dominance: ${corrAnalysis.dominance.dominance} bps (${corrAnalysis.dominance.regime})`);
+  }
+  if (corrAnalysis.ethBtc) {
+    console.log(`   [CORR] ETH/BTC: ${corrAnalysis.ethBtc.ratio} (${corrAnalysis.ethBtc.signal})`);
+  }
+
+  // ═══ LÍMITE DE POSICIONES ══════════════════════════════════════
+  const posCheck = canOpenPosition(3); // Máximo 3 posiciones abiertas
+  if (!posCheck.canOpen) {
+    console.log(`[SCAN #${STATE.scanCount}] Límite de posiciones alcanzado (${posCheck.openCount}/${posCheck.maxPositions}).`);
+    STATE.isScanning = false;
+    return;
+  }
+
   // ═══ BEST-OF-CYCLE: Solo la señal #1 ══════════════════════════
   if (candidates.length === 0) {
     console.log(`[SCAN #${STATE.scanCount}] Sin señales de calidad este ciclo.`);
@@ -613,7 +640,11 @@ async function runCycle(config) {
   const agentInfo = STATE.agent.trained
     ? ` | Agent: ${STATE.agent.traded} traded, ${STATE.agent.skipped} skipped`
     : '';
-  console.log(`[SCAN #${STATE.scanCount}] OK. Senales: ${Object.keys(STATE.signals).length}${structInfo}${agentInfo}`);
+  const posInfo = getPositionStats();
+  const posString = posInfo.openPositions > 0
+    ? ` | Pos: ${posInfo.openPositions} abiertas, PnL: ${posInfo.totalPnl}%`
+    : '';
+  console.log(`[SCAN #${STATE.scanCount}] OK. Senales: ${Object.keys(STATE.signals).length}${structInfo}${agentInfo}${posString}`);
 
   // Guardar Q-table cada 10 ciclos
   if (STATE.scanCount % 10 === 0 && STATE.agent.trained) {
