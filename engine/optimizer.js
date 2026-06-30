@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { runBacktest, calcMetrics } from './backtester.js';
+import { ema as emaFn, calcRSI as rsiFn, calcMACD as macdFn } from './signals.js';
 
 // ── GENE STRUCTURE ──────────────────────────────────────────────
 // Cada gen representa un set de parámetros del sistema de señales
@@ -155,7 +156,6 @@ function simulateWithGene(gene, candles, tf) {
       const closes = candles.slice(0, i + 1).map(cv => cv.close);
       if (closes.length < 50) continue;
 
-      const { ema: emaFn, calcRSI: rsiFn, calcMACD: macdFn } = await import('./signals.js');
       const ema20 = emaFn(closes, 20);
       const ema50 = emaFn(closes, 50);
       const rsi = rsiFn(candles.slice(0, i + 1), 14);

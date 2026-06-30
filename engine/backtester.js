@@ -442,7 +442,9 @@ export function calcMetrics(trades) {
   };
 }
 
-// ── MAIN ───────────────────────────────────────────────────────
+// ── MAIN (solo se ejecuta si se llama directamente) ─────────────
+const isMainModule = process.argv[1] && process.argv[1].includes('backtester');
+if (isMainModule) {
 const args = process.argv.slice(2);
 const symbol = args[0] || 'BTCUSDT';
 const tf     = args[1] || '1h';
@@ -533,3 +535,4 @@ try {
     console.error(e.stack);
     process.exit(1);
   }
+} // end isMainModule
