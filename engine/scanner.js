@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 //  engine/scanner.js  —  Trading Dashboard PRO v8.0
-//  Motor de Escaneo Autónomo 24/7 con ML + Regime + Risk + Optimizer
+//  Motor de Escaneo Autónomo 24/7 — Structure-Based Trading
 // ═══════════════════════════════════════════════════════════════
 import { scoreSignal, TF_CONFIG, TF_PARENT } from './signals.js';
 import { sendTelegram, buildAlertMessage }    from './telegram.js';
@@ -10,6 +10,7 @@ import { extractFeatures, LogisticClassifier } from './ml.js';
 import { calcPositionSize, kellyFraction } from './risk.js';
 import { geneticOptimize } from './optimizer.js';
 import { agentPredict, trainFromHistory, getAgentStats, exportQTable, importQTable } from './agent.js';
+import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -32,15 +33,21 @@ export const STATE = {
   regime:       { trending: 0, ranging: 0, volatile: 0, blocked: 0 },
   optimizer:    { optimized: 0, lastRun: null },
   agent:        { trained: false, decisions: 0, skipped: 0, traded: 0 },
-  optimizedParams: {}, // { 'BTCUSDT-1h': { wEma: 1.2, ... } }
+  structure:    { elite: 0, strong: 0, moderate: 0, weak: 0, filtered: 0 },
+  optimizedParams: {},
 };
 
 const alertCooldown  = {};
 const lastDirSent    = {};
 const mayorCache     = {};
 const MAYOR_CACHE_MS = 3 * 60 * 1000;
-const ANTI_CONTRA_MS = 15 * 60 * 1000;
-const OPT_RETRAIN_MS = 6 * 60 * 60 * 1000; // Re-optimizar cada 6h
+const ANTI_CONTRA_MS = 60 * 60 * 1000; // 60 min (era 15)
+const OPT_RETRAIN_MS = 6 * 60 * 60 * 1000;
+
+// ═══ CONFIGURACIÓN DE CALIDAD ══════════════════════════════════
+const MIN_QUALITY = 'strong';  // 'elite' (85+) o 'strong' (70+)
+const MIN_SCORE_STRUCTURE = 70; // Mínimo score estructural
+const BEST_OF_CYCLE = true;    // Solo la señal #1 por escaneo
 
 // ── ML CLASSIFIER GLOBAL ─────────────────────────────────────────
 let mlClassifier = new LogisticClassifier();
@@ -370,134 +377,189 @@ async function runCycle(config) {
   STATE.scanCount++;
   STATE.lastScan = new Date().toISOString();
 
-  console.log(`\n[SCAN #${STATE.scanCount}] Sesion: ${session.name} | Score>=${session.minScore}/14 | ML: ${STATE.ml.trained ? 'ON' : 'OFF'}`);
+  console.log(`\n[SCAN #${STATE.scanCount}] Sesion: ${session.name} | Calidad>=${MIN_SCORE_STRUCTURE}/100 | ML: ${STATE.ml.trained ? 'ON' : 'OFF'}`);
 
   const activeThisCycle = new Set();
   sentThisCycle.clear();
 
+  // ═══ CANDIDATOS DEL CICLO (para best-of-cycle) ════════════════
+  const candidates = [];
+
   for (const sym of config.symbols) {
-    for (const tf of config.tfs) {
-      const key = `${sym}-${tf}`;
-      try {
-        const candles      = await fetchCandles(sym, tf);
-        const mayorCandles = await getMayorCandles(sym, tf);
-
-        if (candles && candles.length)
-          STATE.prices[sym] = candles[candles.length - 1].close;
-
-        // Obtener pesos optimizados para este par/TF
-        const customWeights = getOptimizedWeights(sym, tf);
-
-        // scoreSignal ahora incluye ML + regime internamente
-        let sig = await scoreSignal(candles, tf, TF_CONFIG, mayorCandles, {
-          customWeights,
-          mlClassifier: STATE.ml.trained ? mlClassifier : null,
-        });
-        if (!sig || sig.signal === 'WAIT') continue;
-
-        // Track regime stats
-        if (sig.regime) {
-          if (sig.regime.regime === 'trending') STATE.regime.trending++;
-          else if (sig.regime.regime === 'ranging') STATE.regime.ranging++;
-          else if (sig.regime.regime === 'volatile') STATE.regime.volatile++;
+    try {
+      // ═══ OBTENER CANDLES DE MÚLTIPLES TFs ═══════════════════
+      const candlesByTF = {};
+      for (const tf of config.tfs) {
+        const candles = await fetchCandles(sym, tf);
+        if (candles && candles.length >= 50) {
+          candlesByTF[tf] = candles;
+          if (tf === '1h' || tf === config.tfs[0]) {
+            STATE.prices[sym] = candles[candles.length - 1].close;
+          }
         }
+        await new Promise(r => setTimeout(r, 200));
+      }
 
-        // Track ML stats
-        if (sig.mlConfidence != null) {
-          STATE.ml.total++;
-          STATE.ml.confidence += sig.mlConfidence;
-          if (sig.mlFiltered) STATE.ml.filtered++;
+      if (Object.keys(candlesByTF).length < 2) continue;
+
+      // ═══ ANÁLISIS DE ESTRUCTURA MULTI-TF ═══════════════════════
+      const multiTF = analyzeMultiTF(candlesByTF);
+      if (!multiTF || multiTF.percentage < MIN_SCORE_STRUCTURE) {
+        if (multiTF) {
+          STATE.structure[multiTF.quality]++;
+          if (multiTF.percentage < MIN_SCORE_STRUCTURE) STATE.structure.filtered++;
         }
-        if (sig.regimeBlocked) STATE.regime.blocked++;
+        continue;
+      }
 
-        // Filtro anti-contradiccion
-        if (isContradicted(sym, sig.dir)) {
-          const last    = lastDirSent[sym];
-          const restMin = Math.ceil((ANTI_CONTRA_MS - (Date.now() - last.time)) / 60000);
-          console.log(`   [ANTI-CONTRA] ${sym} ${tf} - ${sig.signal} bloqueado (espera ${restMin} min)`);
+      // ═══ INDICADORES COMPLEMENTARIOS ═══════════════════════════
+      const entryTF = Object.keys(candlesByTF).pop();
+      const indicators = complementaryIndicators(candlesByTF[entryTF]);
+
+      // ═══ SCORING FINAL ═════════════════════════════════════════
+      const structResult = structureScore(multiTF, indicators);
+
+      // Solo calidad 'strong' o 'elite'
+      if (structResult.quality !== 'strong' && structResult.quality !== 'elite') {
+        STATE.structure[structResult.quality]++;
+        STATE.structure.filtered++;
+        console.log(`   [STRUCT] ${sym} ${structResult.quality} (${structResult.score}/100) — filtrado`);
+        continue;
+      }
+
+      STATE.structure[structResult.quality]++;
+
+      // ═══ FILTROS ADICIONALES ══════════════════════════════════
+
+      // Anti-contradicción
+      if (isContradicted(sym, structResult.direction)) {
+        const last = lastDirSent[sym];
+        const restMin = Math.ceil((ANTI_CONTRA_MS - (Date.now() - last.time)) / 60000);
+        console.log(`   [ANTI-CONTRA] ${sym} ${structResult.direction} bloqueado (espera ${restMin} min)`);
+        continue;
+      }
+
+      // Correlación
+      const group = CORR_GROUPS.find(g => g.includes(sym)) || [sym];
+      const groupKey = group.sort().join('-');
+      const existing = sentThisCycle.get(groupKey);
+      if (existing && existing.dir === structResult.direction) {
+        if (structResult.score - existing.score < 10) {
+          console.log(`   [CORR] ${sym} descartada, ${existing.sym} ya tiene ${existing.dir} (${existing.score} vs ${structResult.score})`);
           continue;
         }
-
-        // Filtro de correlacion
-        const group = CORR_GROUPS.find(g => g.includes(sym)) || [sym];
-        const groupKey = group.sort().join('-');
-        const existing = sentThisCycle.get(groupKey);
-        if (existing) {
-          if (existing.dir === sig.dir) {
-            if (sig.score - existing.score < 1.5) {
-              console.log(`   [CORR] ${sym} ${tf} - ${sig.signal} (${sig.score}) descartada, ${existing.sym} ya tiene ${existing.dir} (${existing.score})`);
-              continue;
-            }
-            console.log(`   [CORR] ${sym} ${tf} - ${sig.signal} (${sig.score}) supera a ${existing.sym} (${existing.score})`);
-          }
-        }
-        sentThisCycle.set(groupKey, { dir: sig.dir, score: sig.score, sym, tf });
-
-        // ── RL AGENT: decides si operar o no ─────────────────────
-        STATE.agent.decisions++;
-        if (STATE.agent.trained) {
-          const agentDec = agentPredict(candles);
-          sig.agentDecision = agentDec;
-
-          if (agentDec.action === 'SKIP') {
-            STATE.agent.skipped++;
-            console.log(`   [AGENT] ${sym} ${tf} SKIP (conf: ${(agentDec.confidence * 100).toFixed(0)}%, Q-trade: ${agentDec.qTrade}, Q-skip: ${agentDec.qSkip})`);
-            continue;
-          }
-          STATE.agent.traded++;
-          console.log(`   [AGENT] ${sym} ${tf} TRADE APROBADO (conf: ${(agentDec.confidence * 100).toFixed(0)}%)`);
-        }
-
-        activeThisCycle.add(key);
-        const isDivergence = sig.divValid && sig.divergence;
-        STATE.signals[key] = {
-          sym, tf, ...sig, isDivergence,
-          regime: sig.regime || 'unknown',
-          mlConfidence: sig.mlConfidence || null,
-        };
-
-        const now = Date.now();
-        if (!alertCooldown[key] || now - alertCooldown[key] > session.cooldownMs) {
-          alertCooldown[key] = now;
-          registerSent(sym, sig.dir);
-
-          const text = buildAlertMessage(sym, tf, sig, isDivergence);
-          if (config.telegram.token && config.telegram.chatId) {
-            const result = await sendTelegram(config.telegram.token, config.telegram.chatId, text);
-            const tag = isDivergence ? 'DIV' : 'ALERTA';
-            if (result.ok) {
-              const mlTag = sig.mlConfidence ? ` ML:${(sig.mlConfidence * 100).toFixed(0)}%` : '';
-              const regimeTag = sig.regime ? ` [${sig.regime}]` : '';
-              console.log(`   [${tag}] ${sig.signal} ${sym} ${tf} Score:${sig.score}/14${regimeTag}${mlTag}`);
-              await trackSignal(sym, tf, sig, isDivergence).catch(() => {});
-            } else {
-              console.log(`   [ERR TELEGRAM] ${JSON.stringify(result)}`);
-            }
-          }
-        }
-
-      } catch (e) {
-        console.error(`   [ERR] Scanner ${sym}/${tf}: ${e.message}`);
       }
-      await new Promise(r => setTimeout(r, 600));
+      sentThisCycle.set(groupKey, { dir: structResult.direction, score: structResult.score, sym });
+
+      // RL Agent
+      STATE.agent.decisions++;
+      const entryCandles = candlesByTF[entryTF];
+      if (STATE.agent.trained && entryCandles) {
+        const agentDec = agentPredict(entryCandles);
+        if (agentDec.action === 'SKIP') {
+          STATE.agent.skipped++;
+          console.log(`   [AGENT] ${sym} SKIP (${(agentDec.confidence * 100).toFixed(0)}%)`);
+          continue;
+        }
+        STATE.agent.traded++;
+      }
+
+      // ═══ CANDIDATO VÁLIDO ═════════════════════════════════════
+      candidates.push({
+        sym,
+        direction: structResult.direction,
+        score: structResult.score,
+        quality: structResult.quality,
+        reasons: structResult.reasons,
+        multiTF,
+        indicators,
+        entryTF,
+        candles: entryCandles,
+      });
+
+      console.log(`   [STRUCT] ${sym} ${structResult.direction} ${structResult.score}/100 (${structResult.quality}) — ${structResult.reasons.join(', ')}`);
+
+    } catch (e) {
+      STATE.errors.push({ sym, error: e.message, time: new Date().toISOString() });
     }
   }
 
-  // Limpiar senales vencidas
+  // ═══ BEST-OF-CYCLE: Solo la señal #1 ══════════════════════════
+  if (candidates.length === 0) {
+    console.log(`[SCAN #${STATE.scanCount}] Sin señales de calidad este ciclo.`);
+    STATE.isScanning = false;
+    return;
+  }
+
+  // Ordenar por score (mayor primero)
+  candidates.sort((a, b) => b.score - a.score);
+
+  // Enviar solo la mejor señal (o las que superen 85 si BEST_OF_CYCLE está activo)
+  const toSend = BEST_OF_CYCLE ? [candidates[0]] : candidates.filter(c => c.score >= 85);
+
+  for (const cand of toSend) {
+    const { sym, direction, score, quality, reasons, multiTF, indicators, entryTF, candles } = cand;
+
+    // Construir señal compatible con el sistema existente
+    const sig = {
+      signal: direction,
+      dir: direction === 'LONG' ? 'up' : 'down',
+      score: score / 100 * 14, // Convertir a escala 0-14 para compatibilidad
+      quality,
+      reasons,
+      macro: multiTF.macroDirection,
+      pullback: multiTF.pullbackSetup?.zone,
+      atr: indicators?.atrPct || 0,
+      mlConfidence: null,
+      regime: null,
+    };
+
+    // Track
+    trackSignal(sym, entryTF, direction, sig.score, candles);
+
+    // Cooldown
+    const cdKey = `${sym}-${direction}`;
+    alertCooldown[cdKey] = Date.now();
+    lastDirSent[sym] = { dir: direction, time: Date.now() };
+    activeThisCycle.add(sym);
+
+    // Enviar a Telegram
+    try {
+      const msg = buildAlertMessage(sym, entryTF, sig);
+      await sendTelegram(msg);
+      console.log(`   ✅ [ENVIADO] ${sym} ${entryTF} ${direction} — Score: ${score}/100 (${quality})`);
+    } catch (e) {
+      console.error(`   ❌ Error enviando ${sym}:`, e.message);
+    }
+
+    // Guardar señal activa
+    STATE.signals[sym] = {
+      ...sig,
+      sym,
+      tf: entryTF,
+      time: new Date().toISOString(),
+    };
+  }
+
+  if (BEST_OF_CYCLE && candidates.length > 1) {
+    console.log(`   [BEST] ${candidates.length} candidatos, enviada solo la #1 (${candidates[0].score}/100)`);
+  }
+
+  // Limpiar señales vencidas
   const before = Object.keys(STATE.signals).length;
   for (const key of Object.keys(STATE.signals))
     if (!activeThisCycle.has(key)) delete STATE.signals[key];
   const removed = before - Object.keys(STATE.signals).length;
-  if (removed > 0) console.log(`   ${removed} senal(es) vencida(s) eliminada(s).`);
+  if (removed > 0) console.log(`   ${removed} señal(es) vencida(s) eliminada(s).`);
 
   await evaluatePending(fetchCandles).catch(() => {});
 
   STATE.isScanning = false;
-  const mlAvg = STATE.ml.total > 0 ? (STATE.ml.confidence / STATE.ml.total * 100).toFixed(1) : 0;
+  const structInfo = ` | Struct: ${STATE.structure.elite} elite, ${STATE.structure.strong} strong, ${STATE.structure.filtered} filtradas`;
   const agentInfo = STATE.agent.trained
     ? ` | Agent: ${STATE.agent.traded} traded, ${STATE.agent.skipped} skipped`
     : '';
-  console.log(`[SCAN #${STATE.scanCount}] OK. Senales: ${Object.keys(STATE.signals).length} | ML: ${STATE.ml.filtered}/${STATE.ml.total} filtradas (${mlAvg}% avg) | Regime blocked: ${STATE.regime.blocked}${agentInfo}`);
+  console.log(`[SCAN #${STATE.scanCount}] OK. Senales: ${Object.keys(STATE.signals).length}${structInfo}${agentInfo}`);
 
   // Guardar Q-table cada 10 ciclos
   if (STATE.scanCount % 10 === 0 && STATE.agent.trained) {
@@ -538,7 +600,7 @@ export async function startScanner(config) {
   }
 
   runCycle(config);
-  setInterval(() => runCycle(config), 3 * 60 * 1000);
+  setInterval(() => runCycle(config), 5 * 60 * 1000); // Cada 5 minutos (era 3)
 
   // Re-optimizar cada 6 horas
   setInterval(() => autoOptimize(config).catch(e => console.error('[OPT] Error:', e.message)), OPT_RETRAIN_MS);

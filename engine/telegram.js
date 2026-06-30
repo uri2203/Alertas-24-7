@@ -12,42 +12,35 @@ const fp = v => {
 export function buildAlertMessage(sym, tf, sig, isDivergence = false) {
   const emoji = sig.signal === 'LONG' ? '🟢' : '🔴';
   const time  = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
-  const r     = sig.rules || {};
 
-  // Encabezado especial si es senal de divergencia
-  const header = isDivergence
-    ? `📐 <b>DIVERGENCIA RSI — ${sig.signal} ${sym} ${tf.toUpperCase()}</b>`
-    : `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>`;
+  // Encabezado con calidad
+  const qualityEmoji = sig.quality === 'elite' ? '🏆' : '💪';
+  const header = `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>
+${qualityEmoji} <b>Calidad:</b> ${sig.quality?.toUpperCase()} (${sig.score}/100)`;
 
-  const divLine = sig.divergence
-    ? sig.divValid
-      ? `\n📐 <b>Divergencia VALIDADA:</b> ${sig.divergence === 'bullish' ? '🟢 Alcista (MACD+ADX confirman)' : '🔴 Bajista (MACD+ADX confirman)'}`
-      : `\n⚠️ <b>Divergencia detectada pero SIN confirmación:</b> ${sig.divergence === 'bullish' ? '🟢 Alcista' : '🔴 Bajista'} (requiere MACD+ADX)`
+  // Estructura
+  const macroLine = sig.macro
+    ? `\n📈 <b>Macro:</b> ${sig.macro === 'bullish' ? '🟢 Alcista' : sig.macro === 'bearish' ? '🔴 Bajista' : '⚪ Neutral'}`
+    : '';
+  const pullbackLine = sig.pullback
+    ? `\n🎯 <b>Pullback:</b> ${sig.pullback}`
     : '';
 
-  // ML + Regime + Agent info
-  const mlLine = sig.mlConfidence
-    ? `\n🤖 <b>ML Confidence:</b> ${(sig.mlConfidence * 100).toFixed(0)}%`
-    : '';
-  const regimeLine = sig.regime
-    ? `\n📊 <b>Régimen:</b> ${sig.regime}${sig.regimeConfidence ? ` (${(sig.regimeConfidence * 100).toFixed(0)}%)` : ''}`
-    : '';
-  const agentLine = sig.agentDecision
-    ? `\n🧠 <b>RL Agent:</b> ${sig.agentDecision.action} (${(sig.agentDecision.confidence * 100).toFixed(0)}%)`
+  // Razones
+  const reasonsLine = sig.reasons && sig.reasons.length > 0
+    ? `\n🔍 <b>Confluencia:</b> ${sig.reasons.slice(0, 5).join(', ')}`
     : '';
 
   return `${header}
 
-🕐 <b>Hora MX:</b> ${time}
-📊 <b>Score:</b> ${sig.score}/${sig.max} (ponderado)
-${sig.dir === 'up' ? '▲ Dirección: ALCISTA' : '▼ Dirección: BAJISTA'}${divLine}${mlLine}${regimeLine}${agentLine}
+🕐 <b>Hora MX:</b> ${time}${macroLine}${pullbackLine}${reasonsLine}
 
 💰 <b>Niveles de operación:</b>
   • Entrada:  <code>${fp(sig.entry)}</code>
   • Stop:     <code>${fp(sig.sl)}</code>
   • Target 1: <code>${fp(sig.t1)}</code>
   • Target 2: <code>${fp(sig.t2)}</code>
-  • VPOC:     <code>${fp(sig.vpoc)}</code>
+  • R:R:      <code>${sig.rr || '—'}</code>
   • ATR(14):  <code>${fp(sig.atr)}</code>
 
 📋 <b>Condiciones activas:</b>

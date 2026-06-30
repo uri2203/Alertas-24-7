@@ -266,6 +266,8 @@ import { detectRegimeADX, detectRegimeVolatility, detectRegimeTrend, detectRegim
 import { LogisticClassifier, extractFeatures, FEATURE_NAMES } from './ml.js';
 import { monteCarloSimulation, robustnessScore } from './monte.js';
 import { marketToState, chooseAction, agentPredict, trainFromHistory, getAgentStats, exportQTable, resetAgent } from './agent.js';
+import { detectBOS, detectOrderBlocks, detectFVG, detectLiquidityZones, priceInZone, detectPullback, analyzeStructure } from './structure.js';
+import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 
 // ── RISK MODULE ──────────────────────────────────────────────────
 describe('Risk Management', () => {
@@ -499,5 +501,124 @@ describe('RL Agent', () => {
     assert.ok(data.qTable);
     assert.ok(Array.isArray(data.qTable));
     assert.ok(data.qTable.length > 0);
+  });
+});
+
+// ── MARKET STRUCTURE ──────────────────────────────────────────
+describe('Market Structure', () => {
+  it('detectBOS returns null for insufficient data', () => {
+    assert.equal(detectBOS(genCandles(10)), null);
+  });
+
+  it('detectBOS returns valid structure for sufficient data', () => {
+    const candles = genCandles(100);
+    const result = detectBOS(candles);
+    if (result) {
+      assert.ok(['bullish_bos', 'bearish_bos', 'bullish_choch', 'bearish_choch', 'ranging'].includes(result.structure));
+      assert.ok(['uptrend', 'downtrend', 'neutral'].includes(result.trend));
+      assert.ok(Array.isArray(result.swingHighs));
+      assert.ok(Array.isArray(result.swingLows));
+    }
+  });
+
+  it('detectOrderBlocks returns array', () => {
+    const candles = genCandles(100);
+    const blocks = detectOrderBlocks(candles);
+    assert.ok(Array.isArray(blocks));
+    assert.ok(blocks.length <= 5);
+    for (const b of blocks) {
+      assert.ok(b.type === 'bull_ob' || b.type === 'bear_ob');
+      assert.ok(typeof b.high === 'number');
+      assert.ok(typeof b.low === 'number');
+    }
+  });
+
+  it('detectFVG returns array', () => {
+    const candles = genCandles(100);
+    const fvgs = detectFVG(candles);
+    assert.ok(Array.isArray(fvgs));
+    assert.ok(fvgs.length <= 3);
+    for (const f of fvgs) {
+      assert.ok(f.type === 'bull_fvg' || f.type === 'bear_fvg');
+      assert.ok(f.high > f.low);
+    }
+  });
+
+  it('detectLiquidityZones returns buyside and sellside', () => {
+    const candles = genCandles(100);
+    const zones = detectLiquidityZones(candles);
+    assert.ok(zones.buyside);
+    assert.ok(zones.sellside);
+    assert.ok(Array.isArray(zones.buyside));
+    assert.ok(Array.isArray(zones.sellside));
+  });
+
+  it('priceInZone detects when price is in OB', () => {
+    const blocks = [{ type: 'bull_ob', high: 105, low: 100 }];
+    const fvgs = [];
+    const candle = { close: 102 };
+    const result = priceInZone(candle, blocks, fvgs);
+    assert.ok(result.inOB);
+    assert.equal(result.inFVG, null);
+  });
+
+  it('detectPullback returns null for insufficient data', () => {
+    assert.equal(detectPullback(genCandles(5), null, [], []), null);
+  });
+
+  it('analyzeStructure returns complete analysis', () => {
+    const candles = genCandles(100);
+    const result = analyzeStructure(candles);
+    assert.ok(result);
+    assert.ok(typeof result.hasStructure === 'boolean');
+    assert.ok(typeof result.hasPullback === 'boolean');
+    assert.ok(Array.isArray(result.blocks));
+    assert.ok(Array.isArray(result.fvgs));
+  });
+});
+
+// ── CONFLUENCE ────────────────────────────────────────────────
+describe('Confluence', () => {
+  it('analyzeMultiTF returns null for insufficient data', () => {
+    assert.equal(analyzeMultiTF({}), null);
+  });
+
+  it('analyzeMultiTF returns valid analysis', () => {
+    const candlesByTF = {
+      '1h': genCandles(100),
+      '4h': genCandles(100),
+      '1d': genCandles(100),
+    };
+    const result = analyzeMultiTF(candlesByTF);
+    if (result) {
+      assert.ok(['bullish', 'bearish', 'neutral'].includes(result.macroDirection));
+      assert.ok(typeof result.percentage === 'number');
+      assert.ok(result.percentage >= 0 && result.percentage <= 100);
+    }
+  });
+
+  it('complementaryIndicators returns valid indicators', () => {
+    const candles = genCandles(100);
+    const result = complementaryIndicators(candles);
+    assert.ok(result);
+    assert.ok(typeof result.volRatio === 'number');
+    assert.ok(typeof result.momentum === 'number');
+    assert.ok(typeof result.volumeConfirm === 'boolean');
+  });
+
+  it('structureScore returns valid score', () => {
+    const candlesByTF = {
+      '1h': genCandles(100),
+      '4h': genCandles(100),
+      '1d': genCandles(100),
+    };
+    const multiTF = analyzeMultiTF(candlesByTF);
+    const indicators = complementaryIndicators(genCandles(100));
+    const result = structureScore(multiTF, indicators);
+    assert.ok(result);
+    assert.ok(typeof result.score === 'number');
+    assert.ok(result.score >= 0 && result.score <= 100);
+    assert.ok(['none', 'weak', 'moderate', 'strong', 'elite'].includes(result.quality));
+    assert.ok(['LONG', 'SHORT', 'WAIT'].includes(result.direction));
   });
 });
