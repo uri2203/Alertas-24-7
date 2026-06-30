@@ -266,7 +266,7 @@ import { detectRegimeADX, detectRegimeVolatility, detectRegimeTrend, detectRegim
 import { LogisticClassifier, extractFeatures, FEATURE_NAMES } from './ml.js';
 import { monteCarloSimulation, robustnessScore } from './monte.js';
 import { marketToState, chooseAction, agentPredict, trainFromHistory, getAgentStats, exportQTable, resetAgent } from './agent.js';
-import { detectBOS, detectOrderBlocks, detectFVG, detectLiquidityZones, priceInZone, detectPullback, analyzeStructure } from './structure.js';
+import { detectBOS, detectOrderBlocks, detectFVG, detectLiquidityZones, priceInZone, detectPullback, analyzeStructure, checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 
 // ── RISK MODULE ──────────────────────────────────────────────────
@@ -620,5 +620,111 @@ describe('Confluence', () => {
     assert.ok(result.score >= 0 && result.score <= 100);
     assert.ok(['none', 'weak', 'moderate', 'strong', 'elite'].includes(result.quality));
     assert.ok(['LONG', 'SHORT', 'WAIT'].includes(result.direction));
+  });
+});
+
+// ── NEW FILTERS ──────────────────────────────────────────────
+describe('Spread Filter', () => {
+  it('checkSpread returns ok for normal data', () => {
+    const candles = genCandles(10);
+    const result = checkSpread(candles);
+    assert.ok(typeof result.ok === 'boolean');
+    assert.ok(typeof result.spread === 'number');
+  });
+
+  it('checkSpread detects high spread', () => {
+    const candles = [
+      { close: 100, high: 101, low: 99 },
+      { close: 105, high: 106, low: 104 }, // 5% change + 2% range
+    ];
+    const result = checkSpread(candles, 0.1);
+    assert.equal(result.ok, false);
+    assert.ok(result.spread > 0.1);
+  });
+});
+
+describe('Time Filter', () => {
+  it('checkTimeFilter returns valid structure', () => {
+    const result = checkTimeFilter();
+    assert.ok(typeof result.ok === 'boolean');
+    assert.ok(typeof result.hour === 'number');
+    assert.ok(typeof result.session === 'string');
+    assert.ok(typeof result.sessionLabel === 'string');
+  });
+});
+
+describe('Multi-TF OB Confluence', () => {
+  it('multiTFBlockConfluence returns null for insufficient data', () => {
+    assert.equal(multiTFBlockConfluence({}), null);
+  });
+
+  it('multiTFBlockConfluence detects overlapping OBs', () => {
+    const blocksByTF = {
+      '4h': [{ type: 'bull_ob', high: 105, low: 100, strength: 2 }],
+      '1h': [{ type: 'bull_ob', high: 103, low: 98, strength: 3 }],
+    };
+    const result = multiTFBlockConfluence(blocksByTF);
+    assert.ok(result);
+    assert.ok(result.isStrong);
+    assert.ok(result.tfs.includes('4h'));
+    assert.ok(result.tfs.includes('1h'));
+  });
+
+  it('multiTFBlockConfluence returns null for non-overlapping OBs', () => {
+    const blocksByTF = {
+      '4h': [{ type: 'bull_ob', high: 110, low: 105, strength: 2 }],
+      '1h': [{ type: 'bull_ob', high: 100, low: 95, strength: 3 }],
+    };
+    const result = multiTFBlockConfluence(blocksByTF);
+    assert.equal(result, null);
+  });
+});
+
+describe('Invalidation Check', () => {
+  it('checkInvalidation returns valid for normal data', () => {
+    const candles = genCandles(10);
+    const result = checkInvalidation(candles, 'LONG', { high: 200, low: 100 });
+    assert.ok(typeof result.valid === 'boolean');
+  });
+
+  it('checkInvalidation detects price above zone for LONG', () => {
+    const candles = genCandles(10);
+    // Set last candle close above zone
+    candles[candles.length - 1] = { ...candles[candles.length - 1], close: 250 };
+    const result = checkInvalidation(candles, 'LONG', { high: 200, low: 150 });
+    assert.equal(result.valid, false);
+    assert.ok(result.reason.includes('encima'));
+  });
+
+  it('checkInvalidation detects price below zone for SHORT', () => {
+    const candles = genCandles(10);
+    candles[candles.length - 1] = { ...candles[candles.length - 1], close: 50 };
+    const result = checkInvalidation(candles, 'SHORT', { high: 100, low: 80 });
+    assert.equal(result.valid, false);
+    assert.ok(result.reason.includes('debajo'));
+  });
+});
+
+describe('Dynamic Score', () => {
+  it('getDynamicMinScore returns valid structure', () => {
+    const candles = genCandles(100);
+    const result = getDynamicMinScore(70, candles);
+    assert.ok(typeof result === 'object');
+    assert.ok(typeof result.minScore === 'number');
+    assert.ok(typeof result.volatility === 'number');
+  });
+
+  it('getDynamicMinScore raises score for high volatility', () => {
+    // Create highly volatile candles
+    const candles = Array.from({ length: 100 }, (_, i) => ({
+      open: 100 + Math.sin(i) * 50,
+      high: 100 + Math.sin(i) * 50 + 20,
+      low: 100 + Math.sin(i) * 50 - 20,
+      close: 100 + Math.cos(i) * 50,
+      time: i,
+      volume: 1000,
+    }));
+    const result = getDynamicMinScore(70, candles);
+    assert.ok(result.minScore >= 70);
   });
 });

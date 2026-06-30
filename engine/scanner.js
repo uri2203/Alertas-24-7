@@ -11,6 +11,7 @@ import { calcPositionSize, kellyFraction } from './risk.js';
 import { geneticOptimize } from './optimizer.js';
 import { agentPredict, trainFromHistory, getAgentStats, exportQTable, importQTable } from './agent.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
+import { checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -402,18 +403,35 @@ async function runCycle(config) {
 
       if (Object.keys(candlesByTF).length < 2) continue;
 
+      // ═══ FILTRO 1: TIME FILTER (evitar bajo volumen) ═══════════
+      const timeFilter = checkTimeFilter();
+      if (!timeFilter.ok) {
+        console.log(`   [TIME] ${sym} — ${timeFilter.sessionLabel} (${timeFilter.hour}h)`);
+        continue;
+      }
+
+      // ═══ FILTRO 2: SPREAD FILTER ══════════════════════════════
+      const entryTF = Object.keys(candlesByTF).pop();
+      const spreadCheck = checkSpread(candlesByTF[entryTF]);
+      if (!spreadCheck.ok) {
+        console.log(`   [SPREAD] ${sym} — spread ${spreadCheck.spread}% > ${spreadCheck.maxSpreadPct}%`);
+        continue;
+      }
+
+      // ═══ FILTRO 3: DYNAMIC SCORE (volatilidad) ════════════════
+      const dynamicScore = getDynamicMinScore(MIN_SCORE_STRUCTURE, candlesByTF[entryTF]);
+
       // ═══ ANÁLISIS DE ESTRUCTURA MULTI-TF ═══════════════════════
       const multiTF = analyzeMultiTF(candlesByTF);
-      if (!multiTF || multiTF.percentage < MIN_SCORE_STRUCTURE) {
+      if (!multiTF || multiTF.percentage < dynamicScore.minScore) {
         if (multiTF) {
           STATE.structure[multiTF.quality]++;
-          if (multiTF.percentage < MIN_SCORE_STRUCTURE) STATE.structure.filtered++;
+          if (multiTF.percentage < dynamicScore.minScore) STATE.structure.filtered++;
         }
         continue;
       }
 
       // ═══ INDICADORES COMPLEMENTARIOS ═══════════════════════════
-      const entryTF = Object.keys(candlesByTF).pop();
       const indicators = complementaryIndicators(candlesByTF[entryTF]);
 
       // ═══ SCORING FINAL ═════════════════════════════════════════
@@ -428,6 +446,42 @@ async function runCycle(config) {
       }
 
       STATE.structure[structResult.quality]++;
+
+      // ═══ FILTRO 4: INVALIDATION CHECK ═════════════════════════
+      // Verificar que el precio no ya pasó la zona de entrada
+      if (multiTF.pullbackSetup) {
+        const obBlocks = [];
+        for (const [tf, candles] of Object.entries(candlesByTF)) {
+          const struct = analyzeStructure(candles);
+          if (struct?.blocks) obBlocks.push(...struct.blocks);
+        }
+
+        const pullbackZone = multiTF.pullbackSetup;
+        const invalidation = checkInvalidation(
+          candlesByTF[entryTF],
+          structResult.direction,
+          { high: pullbackZone.zonePrice?.split('-')[1] || 0, low: pullbackZone.zonePrice?.split('-')[0] || 0 }
+        );
+
+        if (!invalidation.valid) {
+          console.log(`   [INVALID] ${sym} — ${invalidation.reason}`);
+          continue;
+        }
+      }
+
+      // ═══ FILTRO 5: MULTI-TF OB CONFLUENCE ═════════════════════
+      // Si hay OB coincidente entre TFs = zona MUY fuerte
+      const blocksByTF = {};
+      for (const [tf, candles] of Object.entries(candlesByTF)) {
+        const struct = analyzeStructure(candles);
+        if (struct?.blocks) blocksByTF[tf] = struct.blocks;
+      }
+      const obConfluence = multiTFBlockConfluence(blocksByTF);
+      if (obConfluence?.isStrong) {
+        // Bonus de score por confluencia de OB
+        structResult.score = Math.min(100, structResult.score + 5);
+        reasons.push('ob_confluence_multi_tf');
+      }
 
       // ═══ FILTROS ADICIONALES ══════════════════════════════════
 
@@ -477,7 +531,7 @@ async function runCycle(config) {
         candles: entryCandles,
       });
 
-      console.log(`   [STRUCT] ${sym} ${structResult.direction} ${structResult.score}/100 (${structResult.quality}) — ${structResult.reasons.join(', ')}`);
+      console.log(`   [STRUCT] ${sym} ${structResult.direction} ${structResult.score}/100 (${structResult.quality}) — ${structResult.reasons.join(', ')}${obConfluence?.isStrong ? ' [OB CONFLUENCE]' : ''}`);
 
     } catch (e) {
       STATE.errors.push({ sym, error: e.message, time: new Date().toISOString() });

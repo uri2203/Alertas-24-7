@@ -294,6 +294,231 @@ export function detectPullback(candles, structure, blocks, fvgs) {
   return pullback;
 }
 
+// ── FILTRO DE SPREAD ──────────────────────────────────────────
+// Spread máximo aceptable: 0.1% del precio
+export function checkSpread(candles, maxSpreadPct = 0.1) {
+  if (!candles || candles.length < 2) return { ok: true, spread: 0 };
+
+  const last = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+
+  // Spread estimado: diferencia entre close actual y close anterior
+  // como proxy del spread real (necesitaríamos bid/ask para spread exacto)
+  const priceChange = Math.abs(last.close - prev.close) / prev.close * 100;
+
+  // También usar high-low como indicador de spread intra-vela
+  const candleSpread = (last.high - last.low) / last.close * 100;
+
+  // El spread efectivo es el menor de los dos
+  const spread = Math.min(priceChange, candleSpread);
+
+  return {
+    ok: spread <= maxSpreadPct,
+    spread: Math.round(spread * 1000) / 1000,
+    maxSpreadPct,
+  };
+}
+
+// ── FILTRO HORARIO ────────────────────────────────────────────
+// Evitar horas de bajo volumen: 2-5am Mexico = movimientos falsos
+export function checkTimeFilter() {
+  const now = new Date();
+  const mxHour = parseInt(now.toLocaleString('es-MX', {
+    timeZone: 'America/Mexico_City',
+    hour: 'numeric',
+    hour12: false,
+  }));
+
+  // Horas de bajo volumen (2-5am MX)
+  const lowVolumeHours = [2, 3, 4, 5];
+  const isLowVolume = lowVolumeHours.includes(mxHour);
+
+  // Horas de alta liquidez (9am-4pm MX = NY session)
+  const highLiquidityHours = [9, 10, 11, 12, 13, 14, 15, 16];
+  const isHighLiquidity = highLiquidityHours.includes(mxHour);
+
+  // Sesiones activas
+  let session = 'off';
+  if (mxHour >= 8 && mxHour < 12) session = 'asia_late';    // Cierre Tokyo
+  else if (mxHour >= 9 && mxHour < 17) session = 'london_ny'; // NY + London overlap
+  else if (mxHour >= 17 && mxHour < 21) session = 'evening';  // Post-NY
+  else if (mxHour >= 21 || mxHour < 2) session = 'asia_early';
+  else if (mxHour >= 2 && mxHour < 8) session = 'dead';       // Nadie operando
+
+  return {
+    ok: !isLowVolume,
+    hour: mxHour,
+    isLowVolume,
+    isHighLiquidity,
+    session,
+    sessionLabel: {
+      asia_late: 'Asia (cierre)',
+      london_ny: 'NY + London',
+      evening: 'Post-NY',
+      asia_early: 'Asia (apertura)',
+      dead: 'Bajo volumen',
+      off: 'Fuera de horario',
+    }[session] || session,
+  };
+}
+
+// ── CONFLUENCIA DE ORDER BLOCKS MULTI-TF ─────────────────────
+// Si el OB del 4h y el del 1h coinciden, la zona es MUY fuerte
+export function multiTFBlockConfluence(blocksByTF) {
+  if (!blocksByTF || Object.keys(blocksByTF).length < 2) return null;
+
+  const tfOrder = ['1d', '4h', '1h', '15m'];
+  const availableTFs = tfOrder.filter(tf => blocksByTF[tf]?.length > 0);
+
+  if (availableTFs.length < 2) return null;
+
+  // Buscar OBs que se superponen entre TFs
+  const confluences = [];
+
+  for (let i = 0; i < availableTFs.length; i++) {
+    for (let j = i + 1; j < availableTFs.length; j++) {
+      const tf1 = availableTFs[i];
+      const tf2 = availableTFs[j];
+
+      for (const ob1 of blocksByTF[tf1]) {
+        for (const ob2 of blocksByTF[tf2]) {
+          // ¿Se superponen?
+          const overlapHigh = Math.min(ob1.high, ob2.high);
+          const overlapLow = Math.max(ob1.low, ob2.low);
+
+          if (overlapHigh >= overlapLow) {
+            // Superposición = zona de confluencia
+            const strength = (ob1.strength || 1) + (ob2.strength || 1);
+            confluences.push({
+              type: ob1.type === ob2.type ? ob1.type : 'mixed',
+              high: overlapHigh,
+              low: overlapLow,
+              tfs: [tf1, tf2],
+              strength: Math.min(strength, 10),
+              isStrong: strength >= 4,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Ordenar por fuerza
+  confluences.sort((a, b) => b.strength - a.strength);
+
+  return confluences.length > 0 ? confluences[0] : null;
+}
+
+// ── INVALIDACIÓN DE SEÑAL ─────────────────────────────────────
+// Si el precio ya pasó la zona de entrada, la señal es inválida
+export function checkInvalidation(candles, direction, entryZone) {
+  if (!candles || candles.length < 5 || !entryZone) return { valid: true };
+
+  const recent = candles.slice(-10);
+  const { high: zoneHigh, low: zoneLow } = entryZone;
+
+  // Para LONG: si el precio ya subió mucho desde la zona, entrada mala
+  if (direction === 'LONG') {
+    const lastPrice = recent[recent.length - 1].close;
+    const distanceAbove = (lastPrice - zoneHigh) / zoneHigh * 100;
+
+    // Si ya subió más del 0.5% desde la zona, probablemente ya pasó
+    if (distanceAbove > 0.5) {
+      return {
+        valid: false,
+        reason: `precio ${distanceAbove.toFixed(2)}% encima de zona de entrada`,
+        distancePct: distanceAbove,
+      };
+    }
+  }
+
+  // Para SHORT: si el precio ya bajó mucho desde la zona, entrada mala
+  if (direction === 'SHORT') {
+    const lastPrice = recent[recent.length - 1].close;
+    const distanceBelow = (zoneLow - lastPrice) / zoneLow * 100;
+
+    if (distanceBelow > 0.5) {
+      return {
+        valid: false,
+        reason: `precio ${distanceBelow.toFixed(2)}% debajo de zona de entrada`,
+        distancePct: distanceBelow,
+      };
+    }
+  }
+
+  // Verificar que no hubo una vela de rechazo fuerte en contra
+  const lastCandle = recent[recent.length - 1];
+  const bodySize = Math.abs(lastCandle.close - lastCandle.open);
+  const totalRange = lastCandle.high - lastCandle.low;
+
+  if (totalRange > 0) {
+    const bodyRatio = bodySize / totalRange;
+
+    // Vela de rechazo: mecha larga en contra de la dirección
+    if (direction === 'LONG') {
+      const upperWick = lastCandle.high - Math.max(lastCandle.open, lastCandle.close);
+      const lowerWick = Math.min(lastCandle.open, lastCandle.close) - lastCandle.low;
+
+      if (lowerWick > bodySize * 2 && lowerWick > upperWick * 2) {
+        return {
+          valid: false,
+          reason: 'vela de rechazo bajista detectada',
+          rejectionType: 'bearish_rejection',
+        };
+      }
+    }
+
+    if (direction === 'SHORT') {
+      const upperWick = lastCandle.high - Math.max(lastCandle.open, lastCandle.close);
+      const lowerWick = Math.min(lastCandle.open, lastCandle.close) - lastCandle.low;
+
+      if (upperWick > bodySize * 2 && upperWick > lowerWick * 2) {
+        return {
+          valid: false,
+          reason: 'vela de rechazo alcista detectada',
+          rejectionType: 'bullish_rejection',
+        };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
+// ── SCORE DINÁMICO ────────────────────────────────────────────
+// Subir umbral en alta volatilidad (más ruido = más selectividad)
+export function getDynamicMinScore(baseMinScore, candles) {
+  if (!candles || candles.length < 20) return baseMinScore;
+
+  // Calcular volatilidad reciente (ATR % promedio de últimas 20 velas)
+  const ranges = candles.slice(-20).map(c => (c.high - c.low) / c.close * 100);
+  const avgVolatility = ranges.reduce((a, b) => a + b, 0) / ranges.length;
+
+  // Clasificar volatilidad
+  let volLevel = 'normal';
+  if (avgVolatility > 2.0) volLevel = 'high';
+  else if (avgVolatility > 3.0) volLevel = 'extreme';
+  else if (avgVolatility < 0.5) volLevel = 'low';
+
+  // Ajustar score mínimo según volatilidad
+  let adjustment = 0;
+  switch (volLevel) {
+    case 'high':     adjustment = 5;  break;  // Subir 5 pts
+    case 'extreme':  adjustment = 10; break;  // Subir 10 pts
+    case 'low':      adjustment = -3; break;  // Bajar 3 pts (mercado calmo = más confiable)
+  }
+
+  const dynamicScore = Math.max(50, Math.min(95, baseMinScore + adjustment));
+
+  return {
+    minScore: dynamicScore,
+    baseMinScore,
+    adjustment,
+    volatility: Math.round(avgVolatility * 100) / 100,
+    volLevel,
+  };
+}
+
 // ── ANÁLISIS COMPLETO DE ESTRUCTURA ─────────────────────────
 export function analyzeStructure(candles) {
   if (!candles || candles.length < 50) return null;
