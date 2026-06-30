@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 //  engine/scanner.js  —  Trading Dashboard PRO v8.0
-//  Motor de Escaneo Autónomo 24/7 con ML + Regime + Risk
+//  Motor de Escaneo Autónomo 24/7 con ML + Regime + Risk + Optimizer
 // ═══════════════════════════════════════════════════════════════
 import { scoreSignal, TF_CONFIG, TF_PARENT } from './signals.js';
 import { sendTelegram, buildAlertMessage }    from './telegram.js';
@@ -8,6 +8,14 @@ import { trackSignal, evaluatePending }       from './tracker.js';
 import { detectRegime, regimeScoreAdjustment } from './regime.js';
 import { extractFeatures, LogisticClassifier } from './ml.js';
 import { calcPositionSize, kellyFraction } from './risk.js';
+import { geneticOptimize } from './optimizer.js';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = join(__dirname, '..', 'data');
+if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
 export const STATE = {
   signals:      {},
@@ -21,6 +29,8 @@ export const STATE = {
   session:      null,
   ml:           { trained: false, confidence: 0, filtered: 0, total: 0, correct: 0 },
   regime:       { trending: 0, ranging: 0, volatile: 0, blocked: 0 },
+  optimizer:    { optimized: 0, lastRun: null },
+  optimizedParams: {}, // { 'BTCUSDT-1h': { wEma: 1.2, ... } }
 };
 
 const alertCooldown  = {};
@@ -28,10 +38,51 @@ const lastDirSent    = {};
 const mayorCache     = {};
 const MAYOR_CACHE_MS = 3 * 60 * 1000;
 const ANTI_CONTRA_MS = 15 * 60 * 1000;
+const OPT_RETRAIN_MS = 6 * 60 * 60 * 1000; // Re-optimizar cada 6h
 
 // ── ML CLASSIFIER GLOBAL ─────────────────────────────────────────
 let mlClassifier = new LogisticClassifier();
 let mlTrainData  = [];
+
+// ── CARGAR PARAMETROS OPTIMIZADOS ────────────────────────────────
+function loadOptimizedParams() {
+  try {
+    const optAllPath = join(DATA_DIR, 'opt-all.json');
+    if (existsSync(optAllPath)) {
+      const data = JSON.parse(readFileSync(optAllPath, 'utf8'));
+      if (data.results) {
+        for (const [sym, val] of Object.entries(data.results)) {
+          for (const [tf, gene] of Object.entries(val)) {
+            STATE.optimizedParams[`${sym}-${tf}`] = gene;
+          }
+        }
+        console.log(`[OPT] Cargados ${Object.keys(STATE.optimizedParams).length} conjuntos de parametros optimizados`);
+      }
+    }
+  } catch {}
+}
+
+function getOptimizedWeights(sym, tf) {
+  const key = `${sym}-${tf}`;
+  const gene = STATE.optimizedParams[key];
+  if (!gene) return null;
+  // Convertir gene del optimizador a weights del scorer
+  return {
+    ema: gene.wEma || 1.0,
+    fld: gene.wFld || 2.0,
+    macd: gene.wMacd || 2.0,
+    adx: gene.wAdx || 1.5,
+    rsiVol: gene.wRsiVol || 1.5,
+    obv: gene.wObv || 1.0,
+    elliott: gene.wElliott || 1.0,
+    fib: gene.wFib || 1.0,
+    pivot: gene.wPivot || 1.0,
+    tfMayor: gene.wTfMayor || 1.0,
+    rr: gene.wRR || 1.0,
+    regime: 1.0,
+    mlConf: 1.0,
+  };
+}
 
 // ── CORRELACION ──────────────────────────────────────────────────
 const CORR_GROUPS = [
@@ -124,7 +175,7 @@ async function trainMLClassifier(config) {
         const WINDOW = 200;
         for (let i = WINDOW; i < candles.length - 50; i += 10) {
           const window = candles.slice(0, i + 1);
-          const sig = scoreSignal(window, tf, TF_CONFIG);
+          const sig = await scoreSignal(window, tf, TF_CONFIG);
           if (!sig || sig.signal === 'WAIT') continue;
 
           const features = extractFeatures(window, tf);
@@ -176,56 +227,45 @@ async function trainMLClassifier(config) {
   }
 }
 
-// ── REGIME + ML FILTER EN SEÑAL ──────────────────────────────────
-function applyMLRegimeFilter(candles, tf, sig) {
-  if (!sig || sig.signal === 'WAIT') return sig;
+// ── AUTO-OPTIMIZER: optimizar parametros periodicamente ───────────
+async function autoOptimize(config) {
+  console.log('[OPT] Auto-optimizacion iniciada...');
+  const pairsToOptimize = config.symbols.slice(0, 4); // Top 4 symols
 
-  // 1. REGIME DETECTION
-  const regime = detectRegime(candles);
-  if (regime) {
-    if (regime.regime === 'trending') STATE.regime.trending++;
-    else if (regime.regime === 'ranging') STATE.regime.ranging++;
-    else if (regime.regime === 'volatile') STATE.regime.volatile++;
+  for (const sym of pairsToOptimize) {
+    for (const tf of ['1h', '4h']) {
+      try {
+        const candles = await fetchCandles(sym, tf, 1000);
+        if (!candles || candles.length < 300) continue;
 
-    // Bloquear mercados laterales con alta confianza
-    if (regime.regime === 'ranging' && regime.confidence > 0.7) {
-      STATE.regime.blocked++;
-      console.log(`   [REGIME] Ranging (${(regime.confidence * 100).toFixed(0)}%) - bloqueado`);
-      return { ...sig, signal: 'WAIT', regimeBlocked: true };
-    }
+        console.log(`[OPT] Optimizando ${sym} ${tf}...`);
+        const result = geneticOptimize(candles, tf, { popSize: 15, generations: 10 });
 
-    // Ajustar score por regime
-    const regimeAdj = regimeScoreAdjustment(regime);
-    sig.score += regimeAdj;
-    sig.regime = regime.regime;
-    sig.regimeConfidence = regime.confidence;
-  }
+        const key = `${sym}-${tf}`;
+        STATE.optimizedParams[key] = result.bestGene;
+        STATE.optimizer.optimized++;
+        STATE.optimizer.lastRun = new Date().toISOString();
 
-  // 2. ML CLASSIFIER
-  if (STATE.ml.trained) {
-    const features = extractFeatures(candles, tf);
-    if (features) {
-      const mlProb = mlClassifier.predict(features);
-      STATE.ml.total++;
-      STATE.ml.confidence += mlProb;
-
-      // ML threshold: 0.45 minimo para permitir
-      if (mlProb < 0.45) {
-        STATE.ml.filtered++;
-        console.log(`   [ML] Senal filtrada (prob: ${(mlProb * 100).toFixed(1)}%)`);
-        return { ...sig, signal: 'WAIT', mlFiltered: true, mlProb };
+        console.log(`[OPT] ${sym} ${tf}: fitness=${result.bestFitness.toFixed(4)}`);
+        await new Promise(r => setTimeout(r, 500));
+      } catch (e) {
+        console.error(`[OPT] Error ${sym}/${tf}: ${e.message}`);
       }
-      sig.mlConfidence = mlProb;
     }
   }
 
-  // Verificar score minimo despues de ajustes
-  const session = getSession();
-  if (session && sig.score < session.minScore) {
-    return { ...sig, signal: 'WAIT' };
-  }
+  // Guardar todos los parametros optimizados
+  try {
+    const outPath = join(DATA_DIR, 'opt-all.json');
+    writeFileSync(outPath, JSON.stringify({
+      results: STATE.optimizedParams,
+      tf: 'multi',
+      timestamp: new Date().toISOString(),
+    }, null, 2), 'utf8');
+    console.log(`[OPT] Parametros guardados en opt-all.json`);
+  } catch {}
 
-  return sig;
+  console.log(`[OPT] Auto-optimizacion completada: ${STATE.optimizer.optimized} conjuntos`);
 }
 
 // ── CICLO DE ESCANEO ─────────────────────────────────────────────
@@ -266,12 +306,30 @@ async function runCycle(config) {
         if (candles && candles.length)
           STATE.prices[sym] = candles[candles.length - 1].close;
 
-        let sig = scoreSignal(candles, tf, TF_CONFIG, mayorCandles);
+        // Obtener pesos optimizados para este par/TF
+        const customWeights = getOptimizedWeights(sym, tf);
+
+        // scoreSignal ahora incluye ML + regime internamente
+        let sig = await scoreSignal(candles, tf, TF_CONFIG, mayorCandles, {
+          customWeights,
+          mlClassifier: STATE.ml.trained ? mlClassifier : null,
+        });
         if (!sig || sig.signal === 'WAIT') continue;
 
-        // Aplicar filtros ML + Regime
-        sig = applyMLRegimeFilter(candles, tf, sig);
-        if (!sig || sig.signal === 'WAIT') continue;
+        // Track regime stats
+        if (sig.regime) {
+          if (sig.regime.regime === 'trending') STATE.regime.trending++;
+          else if (sig.regime.regime === 'ranging') STATE.regime.ranging++;
+          else if (sig.regime.regime === 'volatile') STATE.regime.volatile++;
+        }
+
+        // Track ML stats
+        if (sig.mlConfidence != null) {
+          STATE.ml.total++;
+          STATE.ml.confidence += sig.mlConfidence;
+          if (sig.mlFiltered) STATE.ml.filtered++;
+        }
+        if (sig.regimeBlocked) STATE.regime.blocked++;
 
         // Filtro anti-contradiccion
         if (isContradicted(sym, sig.dir)) {
@@ -349,11 +407,14 @@ async function runCycle(config) {
 export async function startScanner(config) {
   console.log('================================================');
   console.log('  Motor Autonomo 24/7  v8.0');
-  console.log('  ML Classifier + Regime Detection + Risk');
+  console.log('  ML + Regime + Risk + Optimizer + Monte Carlo');
   console.log('  Tracker de resultados ACTIVO');
   console.log('  Horario Mexico activado');
   console.log('================================================');
   STATE.daemonActive = true;
+
+  // Cargar parametros optimizados guardados
+  loadOptimizedParams();
 
   // Entrenar ML al iniciar
   try {
@@ -362,6 +423,18 @@ export async function startScanner(config) {
     console.error('[ML] Error entrenando:', e.message);
   }
 
+  // Auto-optimizar si no hay parametros guardados
+  if (Object.keys(STATE.optimizedParams).length === 0) {
+    try {
+      await autoOptimize(config);
+    } catch (e) {
+      console.error('[OPT] Error auto-optimizando:', e.message);
+    }
+  }
+
   runCycle(config);
   setInterval(() => runCycle(config), 3 * 60 * 1000);
+
+  // Re-optimizar cada 6 horas
+  setInterval(() => autoOptimize(config).catch(e => console.error('[OPT] Error:', e.message)), OPT_RETRAIN_MS);
 }

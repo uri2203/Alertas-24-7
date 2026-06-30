@@ -1,8 +1,28 @@
 // ═══════════════════════════════════════════════════════════════
 //  engine/signals.js  —  Trading Dashboard PRO v8.0
-//  Base v7.1 + filtros de tendencia + OBV + R:R
+//  Base v7.1 + filtros de tendencia + OBV + R:R + ML + Regime
 //  Pure math — no I/O, no side effects, fully testable
 // ═══════════════════════════════════════════════════════════════
+
+// Lazy imports for ML/regime (circular dependency avoidance)
+let _detectRegime = null;
+let _extractFeatures = null;
+
+async function loadRegimeModule() {
+  if (!_detectRegime) {
+    const mod = await import('./regime.js');
+    _detectRegime = mod.detectRegime;
+  }
+  return _detectRegime;
+}
+
+async function loadMLModule() {
+  if (!_extractFeatures) {
+    const mod = await import('./ml.js');
+    _extractFeatures = mod.extractFeatures;
+  }
+  return _extractFeatures;
+}
 
 // ── EMA ─────────────────────────────────────────────────────────
 export function ema(values, period) {
@@ -343,24 +363,31 @@ export function scoreTFMayor(candles, tf) {
 // ════════════════════════════════════════════════════════════════
 //  SCORE PONDERADO v8.0 — Base v7.1 + mejoras selectivas
 //
-//  Condiciones (12 puntos totales):
+//  Condiciones (14 puntos totales):
 //    EMA Trend  (1.0)  — filtro de tendencia dominante (200 EMA slope)
 //    FLD Hurst  (2.0)  — señal principal de dirección
 //    MACD dir   (2.0)  — confirmación de momentum
 //    ADX+DI     (1.5)  — fuerza + dirección de tendencia
 //    RSI+Vol    (1.5)  — confirmación de momentum
-//    OBV        (1.0)  — flujo de volumen (NUEVO)
+//    OBV        (1.0)  — flujo de volumen
 //    Elliott    (1.0)  — patrón de estructura
 //    FibBounce  (1.0)  — rebote en nivel clave
 //    Pivot      (1.0)  — proximidad a zona de control
 //    TF Mayor   (1.0)  — alineación multi-timeframe
-//    R:R        (1.0)  — ratio riesgo:beneficio mínimo (NUEVO)
+//    R:R        (1.0)  — ratio riesgo:beneficio mínimo
+//    Regime     (1.0)  — bonus por régimen favorable (NUEVO v8.0)
+//    ML Conf    (1.0)  — bonus por confianza ML (NUEVO v8.0)
 //
-//  Score mínimo: 8.0/12 (producción)
+//  Score mínimo: 7.0/14 (producción)
 //  FILTRO DURO: EMA 200 trend bloquea señales en contra
+//  FILTRO ML: prob < 0.45 bloquea señal
+//  FILTRO REGIME: ranging con alta confianza bloquea señal
 // ════════════════════════════════════════════════════════════════
-export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null) {
+export async function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null, opts = {}) {
   if (!candles || candles.length < 60) return null;
+
+  // Opts puede contener: customWeights, mlClassifier, regimeData, kellyData
+  const customWeights = opts.customWeights || null;
 
   const price = candles[candles.length-1].close;
   const piv   = calcPivots(candles);
@@ -430,7 +457,8 @@ export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null
   const divValid = divAligned && macd && macd.dir === fldDir && adx && adx.trending && adx.dir === fldDir;
 
   // ══ SCORING ═══════════════════════════════════════════════════
-  const weights = { ema: 1.0, fld: 2.0, macd: 2.0, adx: 1.5, rsiVol: 1.5, obv: 1.0, elliott: 1.0, fib: 1.0, pivot: 1.0, tfMayor: 1.0, rr: 1.0 };
+  // Pesos por defecto o personalizados (del optimizador)
+  const weights = customWeights || { ema: 1.0, fld: 2.0, macd: 2.0, adx: 1.5, rsiVol: 1.5, obv: 1.0, elliott: 1.0, fib: 1.0, pivot: 1.0, tfMayor: 1.0, rr: 1.0, regime: 1.0, mlConf: 1.0 };
   const total = Object.values(weights).reduce((a, b) => a + b, 0);
 
   let score = 0;
@@ -508,11 +536,64 @@ export function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles = null
     let rrOk = false;
     if (rr >= 1.0) { rrOk = true; score += weights.rr; }
 
+    // ── 12. REGIME BONUS (NUEVO v8.0) ──────────────────────────
+    let regimeBonus = 0;
+    let regimeData = null;
+    try {
+      const detectRegimeFn = await loadRegimeModule();
+      regimeData = detectRegimeFn(candles);
+      if (regimeData) {
+        if (regimeData.regime === 'trending' && regimeData.confidence > 0.6) regimeBonus = weights.regime;
+        else if (regimeData.regime === 'trending') regimeBonus = weights.regime * 0.5;
+        else if (regimeData.regime === 'ranging') regimeBonus = -weights.regime * 0.5;
+        else if (regimeData.regime === 'volatile') regimeBonus = -weights.regime * 0.3;
+        score += regimeBonus;
+      }
+    } catch {}
+
+    // ── 13. ML CONFIDENCE BONUS (NUEVO v8.0) ───────────────────
+    let mlBonus = 0;
+    let mlConfidence = null;
+    if (opts.mlClassifier) {
+      try {
+        const extractFn = await loadMLModule();
+        const features = extractFn(candles, tf);
+        if (features) {
+          mlConfidence = opts.mlClassifier.predict(features);
+          // ML: 0-0.45 = penaliza, 0.45-0.55 = neutro, 0.55-1.0 = bonus
+          if (mlConfidence >= 0.55) mlBonus = weights.mlConf * (mlConfidence - 0.55) * 2;
+          else if (mlConfidence < 0.45) mlBonus = -weights.mlConf * 0.5; // Penalización
+          score += mlBonus;
+        }
+      } catch {}
+    }
+
+    // ── FILTRO ML: bloquear si prob < 0.45 ─────────────────────
+    if (mlConfidence != null && mlConfidence < 0.45) {
+      return {
+        signal: 'WAIT', score: Math.round(score * 10) / 10, max: total, dir, price, vpoc,
+        mlFiltered: true, mlConfidence, regime: regimeData || null,
+        rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null },
+        divergence: divergence || null, time: new Date().toISOString(),
+      };
+    }
+
+    // ── FILTRO REGIME: bloquear ranging con alta confianza ──────
+    if (regimeData && regimeData.regime === 'ranging' && regimeData.confidence > 0.7) {
+      return {
+        signal: 'WAIT', score: Math.round(score * 10) / 10, max: total, dir, price, vpoc,
+        regimeBlocked: true, regime: regimeData,
+        rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null },
+        divergence: divergence || null, time: new Date().toISOString(),
+      };
+    }
+
     return {
       signal: isUp ? 'LONG' : 'SHORT',
       score: Math.round(score * 10) / 10, max: total, dir, price,
       entry: price, sl, t1, t2,
-      vpoc, rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null },
+      vpoc, regime: regimeData || null, mlConfidence,
+      rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null },
       atr: atrMult, divergence: divergence || null, time: new Date().toISOString(),
     };
   }

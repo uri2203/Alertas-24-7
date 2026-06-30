@@ -54,7 +54,7 @@ async function runCycle() {
     for (const tf of CONFIG.tfs) {
       try {
         const candles = await fetchCandles(sym, tf);
-        const sig = scoreSignal(candles, tf, TF_CONFIG);
+        const sig = await scoreSignal(candles, tf, TF_CONFIG);
         if (!sig || sig.signal === 'WAIT') continue;
         if (sig.score < CONFIG.minScore) continue;
 

@@ -7,8 +7,7 @@ import { scoreSignal, TF_CONFIG, TF_PARENT } from './signals.js';
 import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { detectRegime, regimeScoreAdjustment } from './regime.js';
-import { extractFeatures, LogisticClassifier } from './ml.js';
+import { LogisticClassifier } from './ml.js';
 import { kellyFraction, calcPositionSize, calcDynamicSL, calcDynamicTP, checkMaxDrawdown, generateRiskReport } from './risk.js';
 import { monteCarloSimulation, monteCarloReport, robustnessScore } from './monte.js';
 
@@ -88,6 +87,7 @@ export async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) 
   let signalsFound = 0;
   let mlFiltered = 0;
   let regimeBlocked = 0;
+  let regimeStats = { trending: 0, ranging: 0, volatile: 0 };
 
   for (let i = WINDOW; i < loopEnd; i++) {
     try {
@@ -227,32 +227,24 @@ export async function runBacktest(symbol, tf, lookback, evalHours = [1, 4, 24]) 
         ? mayorCandles.slice(0, Math.floor(i * (mayorCandles.length / allCandles.length)) + 1)
         : null;
 
-      const sig = scoreSignal(window, tf, TF_CONFIG, mayorWindow);
+      // scoreSignal ahora incluye ML + regime internamente
+      const sig = await scoreSignal(window, tf, TF_CONFIG, mayorWindow, {
+        mlClassifier: mlTrained ? mlClassifier : null,
+      });
 
       if (sig && sig.signal !== 'WAIT' && sig.score >= MIN_SCORE) {
-        // ── REGIME FILTER ──────────────────────────────────────
-        const regime = detectRegime(window);
-        if (regime && regime.regime === 'ranging' && regime.confidence > 0.7) {
-          regimeBlocked++;
-          continue;
+        // Track stats
+        if (sig.regimeBlocked) { regimeBlocked++; continue; }
+        if (sig.mlFiltered) { mlFiltered++; continue; }
+        if (sig.regime) {
+          if (sig.regime.regime === 'trending') regimeStats.trending++;
+          else if (sig.regime.regime === 'ranging') regimeStats.ranging++;
+          else if (sig.regime.regime === 'volatile') regimeStats.volatile++;
         }
-
-        // ── ML FILTER ──────────────────────────────────────────
-        const features = extractFeatures(window, tf);
-        if (mlTrained && features) {
-          const mlProb = mlClassifier.predict(features);
-          if (mlProb < 0.45) { // ML dice que probablemente pierda
-            mlFiltered++;
-            continue;
-          }
-          sig.mlConfidence = mlProb;
+        if (sig.mlConfidence != null) {
+          STATE.ml.total++;
+          STATE.ml.confidence += sig.mlConfidence;
         }
-
-        // ── REGIME SCORE ADJUSTMENT ────────────────────────────
-        const regimeAdj = regimeScoreAdjustment(regime);
-        sig.score += regimeAdj;
-
-        if (sig.score < MIN_SCORE) continue;
 
         signalsFound++;
         const entryCandle = allCandles[i + ENTRY_OFFSET] || allCandles[i];

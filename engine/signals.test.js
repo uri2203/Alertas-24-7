@@ -223,17 +223,17 @@ describe('Swing Detection', () => {
 
 // ── Score Signal ─────────────────────────────────────────────────
 describe('Score Signal', () => {
-  it('returns WAIT for random data', () => {
+  it('returns WAIT for random data', async () => {
     const candles = genCandles(100);
-    const r = scoreSignal(candles, '1h', TF_CONFIG);
+    const r = await scoreSignal(candles, '1h', TF_CONFIG);
     assert.ok(r);
     assert.ok(r.signal === 'WAIT' || r.signal === 'LONG' || r.signal === 'SHORT');
     assert.ok(typeof r.score === 'number');
-    assert.equal(r.max, 14);  // v8.0: weighted total = 14
+    assert.equal(r.max, 16);  // v8.0: weighted total = 16 (14 base + regime + mlConf)
   });
-  it('returns valid structure', () => {
+  it('returns valid structure', async () => {
     const candles = genCandles(100);
-    const r = scoreSignal(candles, '5m', TF_CONFIG);
+    const r = await scoreSignal(candles, '5m', TF_CONFIG);
     assert.ok(r.rules);
     assert.ok(typeof r.rules.adxOk === 'boolean');
     assert.ok(typeof r.rules.macdOk === 'boolean');
@@ -241,19 +241,19 @@ describe('Score Signal', () => {
     assert.ok(typeof r.rules.obvOk === 'boolean');
     assert.ok('fibOk' in r.rules);
   });
-  it('handles different timeframes', () => {
+  it('handles different timeframes', async () => {
     for (const tf of ['1m','5m','15m','1h','4h','1d']) {
       const candles = genCandles(100);
-      const r = scoreSignal(candles, tf, TF_CONFIG);
+      const r = await scoreSignal(candles, tf, TF_CONFIG);
       assert.ok(r);
     }
   });
-  it('requires direction confirmation from multiple indicators', () => {
+  it('requires direction confirmation from multiple indicators', async () => {
     // Random data should not produce strong signals
     const candles = genCandles(100);
-    const r = scoreSignal(candles, '1h', TF_CONFIG);
+    const r = await scoreSignal(candles, '1h', TF_CONFIG);
     // Random data: score should be below threshold
-    assert.ok(r.score < 10);
+    assert.ok(r.score < 12);
   });
 });
 
