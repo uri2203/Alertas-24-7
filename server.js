@@ -22,10 +22,8 @@ import { trackerRouter }   from './routes/tracker.js';
 import { drawingsRouter }  from './routes/drawings.js';
 import { backtestRouter }  from './routes/backtest.js';
 import { optimizerRouter } from './routes/optimizer.js';
-import agentRouter from './routes/agent.js';
+import { agentRouter } from './routes/agent.js';
 import { startScanner } from './engine/scanner.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 if (!process.env.DASHBOARD_PASSWORD) {
   console.error('FATAL: DASHBOARD_PASSWORD must be set in .env');
