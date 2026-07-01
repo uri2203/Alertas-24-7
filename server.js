@@ -34,7 +34,7 @@ const CONFIG = {
   port:     process.env.PORT     || 3000,
   password: process.env.DASHBOARD_PASSWORD,
   symbols:  (process.env.SCAN_SYMBOLS || 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT').split(','),
-  tfs:      (process.env.SCAN_TFS     || '1m,5m,15m,1h,4h,1d').split(','),
+  tfs:      (process.env.SCAN_TFS     || '1h,4h,1d').split(','),
   telegram: {
     token:  process.env.TELEGRAM_BOT_TOKEN  || '',
     chatId: process.env.TELEGRAM_CHAT_ID   || '',

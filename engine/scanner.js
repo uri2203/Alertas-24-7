@@ -180,6 +180,8 @@ async function trainMLClassifier(config) {
 
   for (const sym of config.symbols) {
     for (const tf of config.tfs) {
+      // Ignorar TFs menores a 1h (demasiado ruido)
+      if (tf === '1m' || tf === '5m' || tf === '15m') continue;
       try {
         const candles = await fetchCandles(sym, tf, 500);
         if (!candles || candles.length < 250) continue;
@@ -246,6 +248,8 @@ async function trainMLClassifier(config) {
     const candlesCache = {};
     for (const sym of config.symbols) {
       for (const tf of config.tfs) {
+        // Ignorar TFs menores a 1h (demasiado ruido)
+        if (tf === '1m' || tf === '5m' || tf === '15m') continue;
         const key = `${sym}-${tf}`;
         try {
           const candles = await fetchCandles(sym, tf, 500);
@@ -393,6 +397,8 @@ async function runCycle(config) {
       // ═══ OBTENER CANDLES DE MÚLTIPLES TFs ═══════════════════
       const candlesByTF = {};
       for (const tf of config.tfs) {
+        // Ignorar TFs menores a 1h (demasiado ruido)
+        if (tf === '1m' || tf === '5m' || tf === '15m') continue;
         const candles = await fetchCandles(sym, tf);
         if (candles && candles.length >= 50) {
           candlesByTF[tf] = candles;
