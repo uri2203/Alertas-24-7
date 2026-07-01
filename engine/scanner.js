@@ -9,7 +9,7 @@ import { detectRegime, regimeScoreAdjustment } from './regime.js';
 import { extractFeatures, LogisticClassifier } from './ml.js';
 import { calcPositionSize, kellyFraction } from './risk.js';
 import { geneticOptimize } from './optimizer.js';
-import { agentPredict, trainFromHistory, getAgentStats, exportQTable, importQTable } from './agent.js';
+import { agentPredict, trainFromHistory, trainOnWinners, getAgentStats, exportQTable, importQTable } from './agent.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 import { checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
 import { analyzeCorrelation } from './correlation.js';
@@ -306,6 +306,16 @@ async function trainMLClassifier(config) {
     if (agentResult) {
       STATE.agent.trained = true;
       console.log(`[AGENT] Entrenado: ${agentResult.episodes} episodes, skip=${agentResult.skipAccuracy}%, trade=${agentResult.tradeAccuracy}%`);
+      if (agentResult.bigWins) console.log(`[AGENT] Big wins: ${agentResult.bigWins}, Big losses: ${agentResult.bigLosses}`);
+    }
+
+    // Entrenar en trades ganadores REALES (el tiburón aprende de sus presas)
+    const winningTrades = allTrades.filter(t => t.result === 'WIN' && t.pnl >= 0.03);
+    if (winningTrades.length > 0) {
+      const hunterResult = trainOnWinners(winningTrades, candlesCache);
+      if (hunterResult) {
+        console.log(`[HUNTER] Entrenado en ${hunterResult.winners} trades ganadores (+3%+). Sample: ${hunterResult.trainedOn}`);
+      }
     }
 
     // Cargar Q-table guardada si existe
@@ -513,17 +523,20 @@ async function runCycle(config) {
       }
       sentThisCycle.set(groupKey, { dir: structResult.direction, score: structResult.score, sym });
 
-      // RL Agent
+      // RL Agent — MODO HUNTER
       STATE.agent.decisions++;
       const entryCandles = candlesByTF[entryTF];
+      let agentSizing = null;
       if (STATE.agent.trained && entryCandles) {
         const agentDec = agentPredict(entryCandles);
         if (agentDec.action === 'SKIP') {
           STATE.agent.skipped++;
-          console.log(`   [AGENT] ${sym} SKIP (${(agentDec.confidence * 100).toFixed(0)}%)`);
+          console.log(`   [AGENT] ${sym} SKIP (${(agentDec.confidence * 100).toFixed(0)}%) — ${agentDec.riskLevel}`);
           continue;
         }
         STATE.agent.traded++;
+        agentSizing = agentDec.sizing;
+        console.log(`   [AGENT] ${sym} TRADE — confidence: ${(agentDec.confidence * 100).toFixed(0)}% | sizing: ${agentDec.sizing.label} (${agentDec.sizing.multiplier}x)`);
       }
 
       // ═══ CANDIDATO VÁLIDO ═════════════════════════════════════
@@ -537,6 +550,7 @@ async function runCycle(config) {
         indicators,
         entryTF,
         candles: entryCandles,
+        agentSizing,
       });
 
       console.log(`   [STRUCT] ${sym} ${structResult.direction} ${structResult.score}/100 (${structResult.quality}) — ${structResult.reasons.join(', ')}${obConfluence?.isStrong ? ' [OB CONFLUENCE]' : ''}`);
@@ -585,7 +599,7 @@ async function runCycle(config) {
   const toSend = BEST_OF_CYCLE ? [candidates[0]] : candidates.filter(c => c.score >= 85);
 
   for (const cand of toSend) {
-    const { sym, direction, score, quality, reasons, multiTF, indicators, entryTF, candles } = cand;
+    const { sym, direction, score, quality, reasons, multiTF, indicators, entryTF, candles, agentSizing } = cand;
 
     // Construir señal compatible con el sistema existente
     const sig = {
@@ -599,6 +613,7 @@ async function runCycle(config) {
       atr: indicators?.atrPct || 0,
       mlConfidence: null,
       regime: null,
+      agentSizing: agentSizing || { multiplier: 1.0, label: 'NORMAL' },
     };
 
     // Track

@@ -265,7 +265,7 @@ import { kellyFraction, calcPositionSize, checkMaxDrawdown, calcExpectancy, maxC
 import { detectRegimeADX, detectRegimeVolatility, detectRegimeTrend, detectRegime, regimeScoreAdjustment } from './regime.js';
 import { LogisticClassifier, extractFeatures, FEATURE_NAMES } from './ml.js';
 import { monteCarloSimulation, robustnessScore } from './monte.js';
-import { marketToState, chooseAction, agentPredict, trainFromHistory, getAgentStats, exportQTable, resetAgent } from './agent.js';
+import { marketToState, chooseAction, agentPredict, trainFromHistory, trainOnWinners, getAgentStats, exportQTable, resetAgent, convictionSize, calcReward, calcSkipReward } from './agent.js';
 import { detectBOS, detectOrderBlocks, detectFVG, detectLiquidityZones, priceInZone, detectPullback, analyzeStructure, checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
 import { getSeasonality, getWeeklyCycle, getHourlyCycle, getBitcoinCycle, detectVolumeRotation, timeFactorScore, fullCycleMap } from './cycles.js';
 import { pearsonCorrelation, returns, correlationMatrix, btcDominanceProxy, ethBtcRatio, detectRedundantSignals, analyzeCorrelation } from './correlation.js';
@@ -449,10 +449,10 @@ describe('Monte Carlo', () => {
 
 // ── RL AGENT ─────────────────────────────────────────────────────
 describe('RL Agent', () => {
-  it('marketToState returns valid state 0-1023', () => {
+  it('marketToState returns valid state 0-32767', () => {
     const candles = genCandles(250);
     const state = marketToState(candles);
-    assert.ok(state >= 0 && state < 1024);
+    assert.ok(state >= 0 && state < 32768);
   });
 
   it('marketToState returns 0 for insufficient data', () => {
@@ -462,12 +462,12 @@ describe('RL Agent', () => {
   it('chooseAction returns 0 or 1', () => {
     resetAgent();
     for (let i = 0; i < 10; i++) {
-      const action = chooseAction(Math.floor(Math.random() * 1024), 0.5);
+      const action = chooseAction(Math.floor(Math.random() * 32768), 0.5);
       assert.ok(action === 0 || action === 1);
     }
   });
 
-  it('agentPredict returns valid structure', () => {
+  it('agentPredict returns valid structure with sizing', () => {
     resetAgent();
     const candles = genCandles(250);
     const pred = agentPredict(candles);
@@ -475,6 +475,45 @@ describe('RL Agent', () => {
     assert.ok(pred.action === 'TRADE' || pred.action === 'SKIP');
     assert.ok(typeof pred.confidence === 'number');
     assert.ok(typeof pred.state === 'number');
+    assert.ok(pred.sizing);
+    assert.ok(typeof pred.sizing.multiplier === 'number');
+    assert.ok(pred.riskLevel);
+  });
+
+  it('convictionSize returns correct sizing', () => {
+    const high = convictionSize(0.95);
+    assert.equal(high.multiplier, 3.0);
+    assert.equal(high.label, 'MAX_CONVICTION');
+
+    const med = convictionSize(0.85);
+    assert.equal(med.multiplier, 2.0);
+    assert.equal(med.label, 'HIGH_CONVICTION');
+
+    const low = convictionSize(0.45);
+    assert.equal(low.multiplier, 0);
+    assert.equal(low.label, 'SKIP');
+  });
+
+  it('calcReward returns aggressive rewards', () => {
+    const bigWin = calcReward(true, 0.06, 1);
+    assert.ok(bigWin >= 5); // rewardWinHuge
+
+    const smallWin = calcReward(true, 0.01, 1);
+    assert.ok(smallWin > 0);
+
+    const bigLoss = calcReward(false, 0.04, 1);
+    assert.ok(bigLoss <= -3); // rewardLossBig
+
+    const skip = calcReward(true, 0.02, 0);
+    assert.equal(skip, 0); // neutral
+  });
+
+  it('calcSkipReward penalizes missed trades', () => {
+    const missed = calcSkipReward(true, 0.03);
+    assert.ok(missed < 0); // penalización
+
+    const goodSkip = calcSkipReward(false, -0.01);
+    assert.ok(goodSkip > 0); // recompensa
   });
 
   it('trainFromHistory returns stats', () => {
@@ -490,6 +529,23 @@ describe('RL Agent', () => {
     assert.ok(result);
     assert.ok(result.episodes > 0);
     assert.ok(typeof result.avgReward === 'number');
+    assert.ok(typeof result.bigWins === 'number');
+    assert.ok(typeof result.bigLosses === 'number');
+  });
+
+  it('trainOnWinners trains on profitable trades', () => {
+    resetAgent();
+    const winners = Array.from({ length: 10 }, (_, i) => ({
+      sym: 'BTCUSDT', tf: '1h',
+      entryTime: 1000 + i * 100,
+      result: 'WIN',
+      pnl: 0.04 + i * 0.01,
+    }));
+    const candlesCache = { 'BTCUSDT-1h': genCandles(300) };
+    const result = trainOnWinners(winners, candlesCache);
+    assert.ok(result);
+    assert.ok(result.trainedOn > 0);
+    assert.equal(result.winners, 10);
   });
 
   it('getAgentStats returns valid stats', () => {
@@ -498,13 +554,17 @@ describe('RL Agent', () => {
     assert.ok(typeof stats.episodes === 'number');
     assert.ok(typeof stats.statesExplored === 'number');
     assert.ok(typeof stats.explorationPct === 'number');
+    assert.equal(stats.mode, 'HUNTER v8.0');
+    assert.equal(stats.features, 15);
   });
 
-  it('exportQTable returns serializable data', () => {
+  it('exportQTable returns serializable data with version', () => {
     const data = exportQTable();
     assert.ok(data.qTable);
     assert.ok(Array.isArray(data.qTable));
     assert.ok(data.qTable.length > 0);
+    assert.equal(data.version, 'HUNTER-8.0');
+    assert.equal(data.features, 15);
   });
 });
 
