@@ -154,6 +154,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--tx);font-famil
     <div class="ic"><span class="il">Fib 61.8</span><span class="iv gld" id="I4">—</span></div>
     <div class="ic"><span class="il">Fib 38.2</span><span class="iv gld" id="I5">—</span></div>
     <div class="ic"><span class="il">VPOC</span>  <span class="iv pur" id="I6">—</span></div>
+    <div class="ic"><span class="il">Hurst</span><span class="iv cyn" id="IH">—</span></div>
     <div class="ic"><span class="il">RSI</span>   <span class="iv neu" id="I7">—</span></div>
     <div class="ic"><span class="il">Herramienta:</span><span class="iv neu" id="I8">Cursor</span></div>
   </div>
@@ -329,15 +330,24 @@ function calcIndicators() {
   // RSI
   ind.rsi=calcRSI(candles);
 
-  // Hurst FLD (series Lightweight Charts)
+  // Hurst FLD (series Lightweight Charts) — usando períodos reales de Hurst
   if (fldAS) { try{chart.removeSeries(fldAS)}catch(_){} fldAS=null; }
   if (fldBS) { try{chart.removeSeries(fldBS)}catch(_){} fldBS=null; }
   if (layers.fld) {
-    const fA=calcFLD(candles,20), fB=calcFLD(candles,40);
+    const hData = calcHurstExponent(candles);
+    const [fp1, fp2] = hData ? hData.periods : [20, 40];
+    const fA=calcFLD(candles,fp1), fB=calcFLD(candles,fp2);
     fldAS=chart.addLineSeries({color:'#06b6d4',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
     fldBS=chart.addLineSeries({color:'#9333ea',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
     if(fA.length)fldAS.setData(fA);
     if(fB.length)fldBS.setData(fB);
+
+    // Update Hurst info display
+    const ih = document.getElementById('IH');
+    if(ih && hData) {
+      ih.textContent = `H=${hData.H.toFixed(2)} ${hData.regime}`;
+      ih.className = `iv ${hData.regime === 'trending' ? 'up' : hData.regime === 'mean_reverting' ? 'dn' : 'neu'}`;
+    }
   }
 }
 
@@ -361,6 +371,54 @@ function calcRSI(candles, p=14) {
   ag/=p;al/=p;
   for(let i=p+1;i<cl.length;i++){const d=cl[i]-cl[i-1];ag=(ag*(p-1)+Math.max(d,0))/p;al=(al*(p-1)+Math.max(-d,0))/p;}
   return al===0?100:+(100-(100/(1+ag/al))).toFixed(1);
+}
+
+// ── HURST EXPONENT (R/S Analysis) ───────────────────────────────────
+function calcHurstExponent(candles) {
+  if (!candles || candles.length < 40) return null;
+  const closes = candles.map(c => c.close);
+  const n = closes.length;
+  const returns = [];
+  for (let i = 1; i < n; i++) {
+    if (closes[i-1] > 0 && closes[i] > 0) returns.push(Math.log(closes[i] / closes[i-1]));
+  }
+  if (returns.length < 20) return null;
+
+  const sizes = [], rsValues = [];
+  for (let size = 20; size <= Math.min(100, Math.floor(returns.length/2)); size += 5) {
+    const numWindows = Math.floor(returns.length / size);
+    if (numWindows < 1) continue;
+    let totalRS = 0, count = 0;
+    for (let w = 0; w < numWindows; w++) {
+      const segment = returns.slice(w*size, (w+1)*size);
+      const mean = segment.reduce((a,b)=>a+b,0)/size;
+      const deviates = [];
+      let cumDev = 0;
+      for (let i = 0; i < size; i++) { cumDev += segment[i] - mean; deviates.push(cumDev); }
+      const R = Math.max(...deviates) - Math.min(...deviates);
+      const variance = segment.reduce((a,b)=>a+(b-mean)**2,0)/size;
+      const S = Math.sqrt(variance);
+      if (S > 0 && R > 0) { totalRS += R/S; count++; }
+    }
+    if (count > 0) { sizes.push(size); rsValues.push(totalRS/count); }
+  }
+  if (sizes.length < 3) return null;
+
+  // Regresión lineal log-log
+  const logN = sizes.map(s=>Math.log(s)), logRS = rsValues.map(rs=>Math.log(rs));
+  const sumX = logN.reduce((a,b)=>a+b,0), sumY = logRS.reduce((a,b)=>a+b,0);
+  const sumXY = logN.reduce((a,b,i)=>a+b*logRS[i],0), sumX2 = logN.reduce((a,b)=>a+b*b,0);
+  const slope = (logN.length*sumXY - sumX*sumY) / (logN.length*sumX2 - sumX*sumX);
+  const H = Math.max(0, Math.min(1, slope));
+  const regime = H > 0.55 ? 'trending' : H < 0.45 ? 'mean_reverting' : 'random';
+
+  // Períodos óptimos de FLD
+  const base = 20;
+  const factor = H > 0.5 ? (1 - (H - 0.5)) : (1 + (0.5 - H));
+  const p1 = Math.max(8, Math.round(base * factor));
+  const p2 = Math.max(16, Math.round(base * factor * 2));
+
+  return { H: +H.toFixed(4), regime, periods: [p1, p2] };
 }
 
 // ── ELLIOTT WAVE ─────────────────────────────────────────────────
@@ -411,7 +469,6 @@ function findPatternInSwings(sw) {
   const found = [];
   for(let i=0; i+4<sw.length; i++){
     const w = sw.slice(i, i+7);
-    // Verificar alternancia H/L
     let alt=true;
     for(let j=1;j<w.length;j++)
       if(w[j].t===w[j-1].t){alt=false;break;}
@@ -419,6 +476,7 @@ function findPatternInSwings(sw) {
 
     const up = w[0].t==='L';
 
+    // ═══ IMPULSE WAVES ════════════════════════════════════════
     if(up && w.length>=5){
       const w1=w[1].p-w[0].p; if(w1<=0)continue;
       const w2r=(w[1].p-w[2].p)/w1; if(w2r<.18||w2r>.92)continue;
@@ -426,7 +484,7 @@ function findPatternInSwings(sw) {
       const w4r=(w[3].p-w[4].p)/w3; if(w4r<.10||w4r>.78)continue;
       if(w[4].p<=w[1].p)continue;
       const wn=w.length>=6?5:4;
-      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'up',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p+w1*1.618});
+      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'up',type:'impulse',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p+w1*1.618,confidence:Math.min(1,(w3/w1+(1-w4r))/2)});
     }
     if(!up && w.length>=5){
       const w1=w[0].p-w[1].p; if(w1<=0)continue;
@@ -435,7 +493,72 @@ function findPatternInSwings(sw) {
       const w4r=(w[4].p-w[3].p)/w3; if(w4r<.10||w4r>.78)continue;
       if(w[4].p>=w[1].p)continue;
       const wn=w.length>=6?5:4;
-      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'dn',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p-w1*1.618});
+      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'dn',type:'impulse',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p-w1*1.618,confidence:Math.min(1,(w3/w1+(1-w4r))/2)});
+    }
+
+    // ═══ ZIGZAG CORRECTION ═══════════════════════════════════
+    if(w.length>=3) {
+      const w0=w[0], w1w=w[1], w2=w[2];
+      if(w0.t==='L'&&w1w.t==='H'&&w2.t==='L') {
+        const waveA=Math.abs(w0.p-w1w.p);
+        const waveB=Math.abs(w2.p-w1w.p);
+        if(waveA>0) {
+          const ratio=waveB/waveA;
+          if(ratio>=0.382&&ratio<=0.786) {
+            found.push({pts:w.slice(0,3),dir:'dn',type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p-waveA*1.0,confidence:0.6+(ratio>0.5?0.2:0)});
+          }
+        }
+      }
+      if(w0.t==='H'&&w1w.t==='L'&&w2.t==='H') {
+        const waveA=Math.abs(w0.p-w1w.p);
+        const waveB=Math.abs(w2.p-w1w.p);
+        if(waveA>0) {
+          const ratio=waveB/waveA;
+          if(ratio>=0.382&&ratio<=0.786) {
+            found.push({pts:w.slice(0,3),dir:'up',type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p+waveA*1.0,confidence:0.6+(ratio>0.5?0.2:0)});
+          }
+        }
+      }
+    }
+
+    // ═══ FLAT CORRECTION ══════════════════════════════════════
+    if(w.length>=3) {
+      const w0=w[0], w1w=w[1], w2=w[2];
+      if(w0.t==='L'&&w1w.t==='H'&&w2.t==='L') {
+        const waveA=Math.abs(w0.p-w1w.p);
+        const waveB=Math.abs(w2.p-w1w.p);
+        if(waveA>0&&waveB/waveA>=0.90&&waveB/waveA<=1.05) {
+          found.push({pts:w.slice(0,3),dir:'up',type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p+waveA*1.2,confidence:0.55});
+        }
+      }
+      if(w0.t==='H'&&w1w.t==='L'&&w2.t==='H') {
+        const waveA=Math.abs(w0.p-w1w.p);
+        const waveB=Math.abs(w2.p-w1w.p);
+        if(waveA>0&&waveB/waveA>=0.90&&waveB/waveA<=1.05) {
+          found.push({pts:w.slice(0,3),dir:'dn',type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p-waveA*1.2,confidence:0.55});
+        }
+      }
+    }
+
+    // ═══ TRIANGLE (5-wave A-B-C-D-E) ═════════════════════════
+    if(w.length>=5) {
+      const isAlt = w.every((s,j)=>j===0||s.t!==w[j-1].t);
+      if(isAlt) {
+        const pcts=[];
+        let valid=true;
+        for(let j=2;j<5;j++){
+          const range=Math.abs(w[j].p-w[j-1].p);
+          const prevRange=Math.abs(w[j-1].p-w[j-2].p);
+          if(prevRange>0) pcts.push(range/prevRange);
+        }
+        if(pcts.length>=2) {
+          for(let j=1;j<pcts.length;j++){if(pcts[j]>=pcts[j-1]){valid=false;break;}}
+          if(valid&&pcts[0]<1) {
+            const isAscending=w[0].p>w[2].p;
+            found.push({pts:w.slice(0,5),dir:isAscending?'up':'dn',type:'triangle',convergences:pcts,wn:5,w5tgt:w[4].p+(isAscending?1:-1)*Math.abs(w[0].p-w[4].p)*0.5,confidence:0.5+(1-pcts[pcts.length-1])*0.3});
+          }
+        }
+      }
     }
   }
   return found.length ? found[found.length-1] : null;
@@ -448,9 +571,10 @@ function updateEWBadge() {
   const degrees = ['Sub-Min','Minuette','Minute','Minor','Intermed'];
   const last = ewPats[ewPats.length - 1];
   const lbls=['①','②','③','④','⑤'];
+  const typeLabels = {impulse:'Impulso',zigzag:'Zigzag',flat:'Plano',triangle:'Triángulo'};
   b.textContent=`${ewPats.length} grado(s)`;
   b.className=`ew-b ${last.dir==='up'?'ew-up':'ew-dn'}`;
-  d.textContent=ewPats.map((p,i) => `${degrees[i]||`G${i}`}: ${lbls[p.wn-1]||p.wn} ${p.dir==='up'?'▲':'▼'}`).join(' · ');
+  d.textContent=ewPats.map((p,i) => `${degrees[i]||`G${i}`}: ${typeLabels[p.type]||'Onda'} ${lbls[p.wn-1]||p.wn} ${p.dir==='up'?'▲':'▼'}`).join(' · ');
 }
 
 // ── CANVAS — COORDENADAS ──────────────────────────────────────────
@@ -469,6 +593,7 @@ function redraw() {
   if(layers.piv  && ind.piv)  drawPivs(ctx,ind.piv);
   if(layers.vpoc && ind.vpoc) drawVPOC(ctx,ind.vpoc);
   if(layers.ew && ewPats.length) ewPats.forEach(p => drawEW(ctx, p));
+  drawHurstPanel(ctx);
   drawings.forEach(d=>drawShape(ctx,d));
   if(dipProg) drawShape(ctx,dipProg,true);
 }
@@ -538,7 +663,8 @@ function drawEW(ctx, p) {
 
   // Panel de información (solo para el primer grado detectado — el más grande)
   if(degreeIdx === 0) {
-    const bx=8,by=8,bw=215,bh=92;
+    const typeLabels = {impulse:'Impulso',zigzag:'Zigzag',flat:'Plano',triangle:'Triángulo'};
+    const bx=8,by=8,bw=230,bh=100;
     ctx.beginPath();
     ctx.moveTo(bx+5,by);ctx.lineTo(bx+bw-5,by);ctx.arcTo(bx+bw,by,bx+bw,by+5,5);
     ctx.lineTo(bx+bw,by+bh-5);ctx.arcTo(bx+bw,by+bh,bx+bw-5,by+bh,5);
@@ -549,18 +675,25 @@ function drawEW(ctx, p) {
 
     const lblsNum=['①','②','③','④','⑤'];
     ctx.font='bold 10px Courier New';ctx.fillStyle=deg.line;
-    ctx.fillText(`Elliott — ${ewPats.length} grado(s) detectados`,bx+8,by+16);
+    ctx.fillText(`Elliott — ${typeLabels[p.type]||'Onda'} | ${ewPats.length} grado(s)`,bx+8,by+16);
     ctx.font='9px Courier New';ctx.fillStyle='#c9d6e8';
-    ctx.fillText(`Onda actual: ${lblsNum[p.wn-1]||p.wn}`,bx+8,by+30);
-    ctx.fillText(`W1: ${fp(p.w1)}  ·  W3: ${fp(p.w3)} (${(p.w3/p.w1*100).toFixed(0)}% de W1)`,bx+8,by+43);
-    ctx.fillText(`W2 retroceso: ${(p.w2r*100).toFixed(0)}%  ·  W4 retroceso: ${(p.w4r*100).toFixed(0)}%`,bx+8,by+56);
+    ctx.fillText(`Onda actual: ${lblsNum[p.wn-1]||p.wn}  Conf: ${(p.confidence*100).toFixed(0)}%`,bx+8,by+30);
+    if(p.type==='impulse') {
+      ctx.fillText(`W1: ${fp(p.w1)}  ·  W3: ${fp(p.w3)} (${(p.w3/p.w1*100).toFixed(0)}% de W1)`,bx+8,by+43);
+      ctx.fillText(`W2: ${(p.w2r*100).toFixed(0)}%  ·  W4: ${(p.w4r*100).toFixed(0)}%`,bx+8,by+56);
+    } else if(p.type==='zigzag') {
+      ctx.fillText(`Onda A: ${fp(p.waveA)}  ·  Onda B: ${fp(p.waveB)} (${(p.bRatio*100).toFixed(0)}%)`,bx+8,by+43);
+    } else if(p.type==='flat') {
+      ctx.fillText(`Flat — B/A: ${(p.bRatio*100).toFixed(0)}% (≈igualdad)`,bx+8,by+43);
+    } else if(p.type==='triangle') {
+      ctx.fillText(`Triángulo — contracción: ${p.convergences.map(v=>(v*100).toFixed(0)+'%').join(' → ')}`,bx+8,by+43);
+    }
     ctx.fillStyle='#f59e0b';ctx.font='bold 9px Courier New';
-    ctx.fillText(`Objetivo W5: ${fp(p.w5tgt)}`,bx+8,by+70);
-    // Listar todos los grados
+    ctx.fillText(`Objetivo: ${fp(p.w5tgt)}`,bx+8,by+70);
     ctx.fillStyle='#94a3b8';ctx.font='8px Courier New';
     const degList = ewPats.map((pt,i) => {
       const d2 = EW_DEGREE_COLORS[i] || EW_DEGREE_COLORS[EW_DEGREE_COLORS.length-1];
-      return `${d2.label}:${lblsNum[pt.wn-1]||pt.wn}`;
+      return `${d2.label}:${typeLabels[pt.type]||'?'}`;
     }).join(' · ');
     ctx.fillText(`Grados: ${degList}`,bx+8,by+84);
   }
@@ -617,6 +750,32 @@ function drawVPOC(ctx,vpoc){
   ctx.strokeStyle='rgba(147,51,234,0.75)';ctx.lineWidth=1.5;ctx.setLineDash([7,3]);ctx.stroke();ctx.setLineDash([]);
   ctx.fillStyle='rgba(147,51,234,0.88)';ctx.font='bold 9px Courier New';
   ctx.fillText(`VPOC  ${fp(vpoc)}`,dc.width/2-45,y-4);
+}
+
+// ── CANVAS — HURST PANEL ────────────────────────────────────────────
+function drawHurstPanel(ctx) {
+  if(!candles||candles.length<40) return;
+  const hData = calcHurstExponent(candles);
+  if(!hData) return;
+  const dc=document.getElementById('DC');
+  const bx=dc.width-195,by=8,bw=185,bh=68;
+
+  ctx.beginPath();
+  ctx.moveTo(bx+5,by);ctx.lineTo(bx+bw-5,by);ctx.arcTo(bx+bw,by,bx+bw,by+5,5);
+  ctx.lineTo(bx+bw,by+bh-5);ctx.arcTo(bx+bw,by+bh,bx+bw-5,by+bh,5);
+  ctx.lineTo(bx+5,by+bh);ctx.arcTo(bx,by+bh,bx,by+bh-5,5);
+  ctx.lineTo(bx,by+5);ctx.arcTo(bx,by,bx+5,by,5);ctx.closePath();
+  ctx.fillStyle='rgba(14,17,23,0.85)';ctx.fill();
+  ctx.strokeStyle='rgba(6,182,212,0.35)';ctx.lineWidth=1;ctx.stroke();
+
+  ctx.font='bold 10px Courier New';ctx.fillStyle='#06b6d4';
+  ctx.fillText(`Hurst Exponent`,bx+8,by+16);
+  ctx.font='9px Courier New';ctx.fillStyle='#c9d6e8';
+  ctx.fillText(`H = ${hData.H.toFixed(4)} (${hData.regime})`,bx+8,by+30);
+  const regColor = hData.regime==='trending'?'#26a69a':hData.regime==='mean_reverting'?'#ef5350':'#5e7a9a';
+  ctx.fillStyle=regColor;ctx.fillText(`→ ${hData.regime==='trending'?'Persistente (tendencial)':hData.regime==='mean_reverting'?'Antipersistente (reversión a media)':'Random walk'}`,bx+8,by+43);
+  ctx.fillStyle='#94a3b8';ctx.font='8px Courier New';
+  ctx.fillText(`FLD períodos: ${hData.periods[0]} / ${hData.periods[1]} (${hData.periods[0]*4}h / ${hData.periods[1]*4}h)`,bx+8,by+57);
 }
 
 // ── CANVAS — DIBUJOS USUARIO ──────────────────────────────────────

@@ -237,12 +237,18 @@ export function detectCandlePatterns(candles, lookback = 5) {
   return { bullish: bullish >= 1, bearish: bearish >= 1 };
 }
 
-// ── HURST FLD ────────────────────────────────────────────────────
+// ── HURST FLD (REAL v8.0) ──────────────────────────────────────
+import { hurstExponent, calcFLDReal, optimalFLDPeriods, hurstPhase } from './hurst.js';
+
 export function calcFLD(candles, period) {
-  const half = Math.floor(period / 2), out = [];
-  for (let i = half; i < candles.length; i++)
-    out.push({ time: candles[i].time, value: candles[i - half].close });
-  return out;
+  return calcFLDReal(candles, period);
+}
+
+// ── HURST EXPOSURE (para scoring) ──────────────────────────────
+export function getHurstData(candles) {
+  const h = hurstExponent(candles);
+  const phase = hurstPhase(candles);
+  return { hurst: h, phase };
 }
 
 // ── PIVOT POINTS ─────────────────────────────────────────────────
@@ -306,36 +312,173 @@ export function detectSwings(candles, lookback) {
   return out.sort((a, b) => a.time - b.time);
 }
 
-// ── ELLIOTT WAVE ─────────────────────────────────────────────────
+// ── ELLIOTT WAVE v8.0 — IMPULSIVE + CORRECTIVE ──────────────────
 export function detectElliott(candles, tf, TF_CONFIG) {
   const lb = Math.max(3, Math.floor(candles.length / 35));
   const sw = detectSwings(candles, lb);
   const cfg = TF_CONFIG[tf] || TF_CONFIG['1h'];
   const found = [];
+
+  // ═══ IMPULSE WAVES (5-wave motive) ═══════════════════════════
   for (let i = 0; i + 4 < sw.length; i++) {
     const w = sw.slice(i, i + 6);
     let alt = true;
     for (let j = 1; j < w.length; j++) if (w[j].t === w[j-1].t) { alt = false; break; }
     if (!alt) continue;
+
     const up = w[0].t === 'L';
     if (up && w.length >= 5) {
       const w1 = w[1].p - w[0].p; if (w1 <= 0) continue;
       const w2r = (w[1].p - w[2].p) / w1; if (w2r < .25 || w2r > .85) continue;
-      const w3 = w[3].p - w[2].p; if (w3 < w1 * .70) continue;
+      const w3 = w[3].p - w[2].p; if (w3 < w1 * .618) continue; // Wave 3 must extend
       const w4r = (w[3].p - w[4].p) / w3; if (w4r < .15 || w4r > .70) continue;
-      if (w[4].p <= w[1].p) continue;
-      found.push({ pts: w.slice(0, Math.min(6, w.length)), dir: 'up', w1, w2r, w3ext: w3/w1, w4r, labels: cfg.labels, degree: cfg.degree, origin: w[0].p, tf });
+      if (w[4].p <= w[1].p) continue; // Wave 4 no overlap wave 1
+      // Wave 5 projection
+      const w5proj = w[4].p + w1 * 0.618;
+      found.push({
+        type: 'impulse', pts: w.slice(0, 6), dir: 'up',
+        w1, w2r, w3ext: w3/w1, w4r,
+        labels: cfg.labels, degree: cfg.degree,
+        origin: w[0].p, target: w5proj, tf,
+        confidence: Math.min(1, (w3/w1 + (1 - w4r)) / 2),
+      });
     }
     if (!up && w.length >= 5) {
       const w1 = w[0].p - w[1].p; if (w1 <= 0) continue;
       const w2r = (w[2].p - w[1].p) / w1; if (w2r < .25 || w2r > .85) continue;
-      const w3 = w[2].p - w[3].p; if (w3 < w1 * .70) continue;
+      const w3 = w[2].p - w[3].p; if (w3 < w1 * .618) continue;
       const w4r = (w[4].p - w[3].p) / w3; if (w4r < .15 || w4r > .70) continue;
       if (w[4].p >= w[1].p) continue;
-      found.push({ pts: w.slice(0, 5), dir: 'dn', w1, w2r, w3ext: w3/w1, w4r, labels: cfg.labels, degree: cfg.degree, origin: w[0].p, tf });
+      const w5proj = w[4].p - w1 * 0.618;
+      found.push({
+        type: 'impulse', pts: w.slice(0, 6), dir: 'dn',
+        w1, w2r, w3ext: w3/w1, w4r,
+        labels: cfg.labels, degree: cfg.degree,
+        origin: w[0].p, target: w5proj, tf,
+        confidence: Math.min(1, (w3/w1 + (1 - w4r)) / 2),
+      });
     }
   }
-  return found.slice(-2);
+
+  // ═══ ZIGZAG CORRECTION (3-wave A-B-C) ═══════════════════════
+  for (let i = 0; i + 2 < sw.length; i++) {
+    const w = sw.slice(i, i + 3);
+    let alt = true;
+    for (let j = 1; j < w.length; j++) if (w[j].t === w[j-1].t) { alt = false; break; }
+    if (!alt) continue;
+
+    // Zigzag bullish: L-H-L (correction in downtrend)
+    if (w[0].t === 'L' && w[1].t === 'H' && w[2].t === 'L') {
+      const waveA = w[0].p - w[1].p; // downward A (inverted labeling for correction)
+      const waveB = w[2].p - w[1].p; // upward B
+      if (waveA > 0 && waveB > 0) {
+        const bRatio = waveB / Math.abs(waveA);
+        // Zigzag: B retraces 38.2%-78.6% of A, C extends beyond A
+        if (bRatio >= 0.382 && bRatio <= 0.786) {
+          const waveCproj = w[2].p - Math.abs(waveA) * 1.0; // C = A length
+          found.push({
+            type: 'zigzag', pts: w, dir: 'dn',
+            waveA: Math.abs(waveA), waveB, bRatio,
+            labels: cfg.labels, degree: cfg.degree,
+            origin: w[0].p, target: waveCproj, tf,
+            confidence: 0.6 + (bRatio > 0.5 ? 0.2 : 0),
+          });
+        }
+      }
+    }
+
+    // Zigzag bearish: H-L-H (correction in uptrend)
+    if (w[0].t === 'H' && w[1].t === 'L' && w[2].t === 'H') {
+      const waveA = w[1].p - w[0].p; // downward A
+      const waveB = w[2].p - w[1].p; // upward B
+      if (waveA < 0 && waveB > 0) {
+        const bRatio = waveB / Math.abs(waveA);
+        if (bRatio >= 0.382 && bRatio <= 0.786) {
+          const waveCproj = w[2].p + Math.abs(waveA) * 1.0;
+          found.push({
+            type: 'zigzag', pts: w, dir: 'up',
+            waveA: Math.abs(waveA), waveB, bRatio,
+            labels: cfg.labels, degree: cfg.degree,
+            origin: w[0].p, target: waveCproj, tf,
+            confidence: 0.6 + (bRatio > 0.5 ? 0.2 : 0),
+          });
+        }
+      }
+    }
+  }
+
+  // ═══ FLAT CORRECTION (3-wave A-B-C sideways) ════════════════
+  for (let i = 0; i + 2 < sw.length; i++) {
+    const w = sw.slice(i, i + 3);
+    let alt = true;
+    for (let j = 1; j < w.length; j++) if (w[j].t === w[j-1].t) { alt = false; break; }
+    if (!alt) continue;
+
+    if (w[0].t === 'L' && w[1].t === 'H' && w[2].t === 'L') {
+      const waveA = Math.abs(w[1].p - w[0].p);
+      const waveB = Math.abs(w[2].p - w[1].p);
+      // Flat: B retraces 90%-105% of A (near equality)
+      if (waveA > 0 && waveB / waveA >= 0.90 && waveB / waveA <= 1.05) {
+        found.push({
+          type: 'flat', pts: w, dir: 'up', // expect continuation up after flat
+          waveA, waveB, bRatio: waveB / waveA,
+          labels: cfg.labels, degree: cfg.degree,
+          origin: w[0].p, target: w[2].p + waveA * 1.2, tf,
+          confidence: 0.55,
+        });
+      }
+    }
+    if (w[0].t === 'H' && w[1].t === 'L' && w[2].t === 'H') {
+      const waveA = Math.abs(w[1].p - w[0].p);
+      const waveB = Math.abs(w[2].p - w[1].p);
+      if (waveA > 0 && waveB / waveA >= 0.90 && waveB / waveA <= 1.05) {
+        found.push({
+          type: 'flat', pts: w, dir: 'dn',
+          waveA, waveB, bRatio: waveB / waveA,
+          labels: cfg.labels, degree: cfg.degree,
+          origin: w[0].p, target: w[2].p - waveA * 1.2, tf,
+          confidence: 0.55,
+        });
+      }
+    }
+  }
+
+  // ═══ TRIANGLE (5-wave A-B-C-D-E) ════════════════════════════
+  for (let i = 0; i + 4 < sw.length; i++) {
+    const w = sw.slice(i, i + 5);
+    let alt = true;
+    for (let j = 1; j < w.length; j++) if (w[j].t === w[j-1].t) { alt = false; break; }
+    if (!alt) continue;
+
+    const pcts = [];
+    let validTriangle = true;
+    for (let j = 1; j < 5; j++) {
+      const range = Math.abs(w[j].p - w[j-1].p);
+      if (j > 1) {
+        const prevRange = Math.abs(w[j-1].p - w[j-2].p);
+        if (prevRange > 0) pcts.push(range / prevRange);
+      }
+    }
+    // Triangle: each wave smaller than previous (converging)
+    if (pcts.length >= 2) {
+      for (let j = 1; j < pcts.length; j++) {
+        if (pcts[j] >= pcts[j-1]) { validTriangle = false; break; }
+      }
+      if (validTriangle && pcts[0] < 1) {
+        const isContracting = w[0].p > w[2].p ? 'descending' : 'ascending';
+        found.push({
+          type: 'triangle', pts: w, dir: isContracting === 'ascending' ? 'up' : 'dn',
+          convergences: pcts,
+          labels: cfg.labels, degree: cfg.degree,
+          origin: w[0].p, target: w[4].p + (isContracting === 'ascending' ? 1 : -1) * Math.abs(w[0].p - w[4].p) * 0.5, tf,
+          confidence: 0.5 + (1 - pcts[pcts.length - 1]) * 0.3,
+        });
+      }
+    }
+  }
+
+  // Ordenar por confianza y retornar las mejores
+  return found.sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 3);
 }
 
 // ── TF PADRE ─────────────────────────────────────────────────────
@@ -394,13 +537,18 @@ export async function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles 
   const fib   = calcFibonacci(candles);
   const atr   = calcATR(candles, 14);
   const vpoc  = calcVPOC(candles.slice(-100));
-  const hp    = (TF_CONFIG[tf] || TF_CONFIG['1h']).hurstP;
+
+  // ── HURST REAL: calcular períodos óptimos de FLD ───────────
+  const hurstData = getHurstData(candles);
+  const H = hurstData.hurst?.H || 0.5;
+  const basePeriod = (TF_CONFIG[tf] || TF_CONFIG['1h']).hurstP[0];
+  const [fldP1, fldP2] = optimalFLDPeriods(H, basePeriod);
 
   // ── 1. EMA TREND (peso: 1.0) — FILTRO DOMINANTE ───────────────
   const trend = detectTrend(candles);
 
-  // ── 2. FLD Hurst (peso: 2.0) ─────────────────────────────────
-  const fdA = calcFLD(candles, hp[0]), fdB = calcFLD(candles, hp[1]);
+  // ── 2. FLD Hurst (peso: 2.0) — CON PERÍODOS REALES ───────────
+  const fdA = calcFLD(candles, fldP1), fdB = calcFLD(candles, fldP2);
   const fldAv = fdA.length ? fdA[fdA.length-1].value : null;
   const fldBv = fdB.length ? fdB[fdB.length-1].value : null;
   let fldDir = null;
@@ -429,9 +577,10 @@ export async function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles 
   // ── 6. OBV (peso: 1.0) — NUEVO ──────────────────────────────
   const obv = calcOBV(candles, 20);
 
-  // ── 7. Elliott (peso: 1.0) ──────────────────────────────────
+  // ── 7. Elliott (peso: 1.0) — CON CORRECCIONES ────────────────
   const waves = detectElliott(candles, tf, TF_CONFIG);
   const w1ok = waves && waves.length > 0;
+  const bestWave = w1ok ? waves[0] : null;
 
   // ── 8. FibBounce (peso: 1.0) ────────────────────────────────
   const fibBounce = detectFibBounce(candles, fib, atr);
@@ -488,9 +637,14 @@ export async function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles 
   let obvOk = false;
   if (obv && ((fldDir === 'up' && obv.rising) || (fldDir === 'dn' && !obv.rising))) { obvOk = true; score += weights.obv; }
 
-  // 7. Elliott (1.0)
+  // 7. Elliott (1.0) — impulse = 1.0, corrective = 0.6
   let elliottOk = false;
-  if (w1ok && waves[0].dir === fldDir) { elliottOk = true; score += weights.elliott; }
+  let elliottBonus = 0;
+  if (w1ok && bestWave.dir === fldDir) {
+    elliottOk = true;
+    elliottBonus = bestWave.type === 'impulse' ? weights.elliott : weights.elliott * 0.6;
+    score += elliottBonus;
+  }
 
   // 8. FibBounce (1.0)
   if (fibOk) score += weights.fib;
@@ -573,7 +727,7 @@ export async function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles 
       return {
         signal: 'WAIT', score: Math.round(score * 10) / 10, max: total, dir, price, vpoc,
         mlFiltered: true, mlConfidence, regime: regimeData || null,
-        rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null },
+        rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, elliottType: bestWave?.type || null, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null, hurst: hurstData.hurst || null, hurstPhase: hurstData.phase || null, fldPeriods: [fldP1, fldP2] },
         divergence: divergence || null, time: new Date().toISOString(),
       };
     }
@@ -583,7 +737,7 @@ export async function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles 
       return {
         signal: 'WAIT', score: Math.round(score * 10) / 10, max: total, dir, price, vpoc,
         regimeBlocked: true, regime: regimeData,
-        rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null },
+        rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, elliottType: bestWave?.type || null, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null, hurst: hurstData.hurst || null, hurstPhase: hurstData.phase || null, fldPeriods: [fldP1, fldP2] },
         divergence: divergence || null, time: new Date().toISOString(),
       };
     }
@@ -593,12 +747,12 @@ export async function scoreSignal(candles, tf, TF_CONFIG, candidateMayorCandles 
       score: Math.round(score * 10) / 10, max: total, dir, price,
       entry: price, sl, t1, t2,
       vpoc, regime: regimeData || null, mlConfidence,
-      rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null },
+      rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, elliottType: bestWave?.type || null, fibOk, pvOk, tfMayorOk, rrOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, atr: atr || null, adx: adx || null, rsiDyn: rsiDyn || null, trend: trend || null, hurst: hurstData.hurst || null, hurstPhase: hurstData.phase || null, fldPeriods: [fldP1, fldP2] },
       atr: atrMult, divergence: divergence || null, time: new Date().toISOString(),
     };
   }
 
-  return { signal: 'WAIT', score: Math.round(score * 10) / 10, max: total, dir, price, vpoc, rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, fibOk, pvOk, tfMayorOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid }, divergence: divergence || null, time: new Date().toISOString() };
+  return { signal: 'WAIT', score: Math.round(score * 10) / 10, max: total, dir, price, vpoc, rules: { fldDir, macdOk, adxOk, emaOk, obvOk, elliottOk, elliottType: bestWave?.type || null, fibOk, pvOk, tfMayorOk, hasDirection, rsiVolumeOk, divergence: divergence || null, divValid, hurst: hurstData.hurst || null, hurstPhase: hurstData.phase || null, fldPeriods: [fldP1, fldP2] }, divergence: divergence || null, time: new Date().toISOString() };
 }
 
 // ── TF CONFIG ────────────────────────────────────────────────────
