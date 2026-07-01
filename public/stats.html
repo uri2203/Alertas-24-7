@@ -138,7 +138,7 @@
 
 <!-- RL AGENT PANEL -->
 <div class="bt-panel" style="border-color:#10b981">
-  <h3 style="color:#10b981">🧠 RL Agent (Q-Learning)</h3>
+  <h3 style="color:#10b981">🧠 ELITE HUNTER — Dashboard de Aprendizaje</h3>
   <div id="AGENT-INFO">Cargando...</div>
   <div class="bt-row">
     <button class="bt-btn" onclick="agentSave()" style="background:#10b981;color:#000">💾 Guardar Q-Table</button>
@@ -785,18 +785,116 @@ async function loadAgentStats() {
     const r = await fetch('/api/agent', { headers: authHeaders() });
     const d = await r.json();
     const s = d.stats;
+    const l = s.learning || {};
     const st = document.getElementById('AGENT-INFO');
+
+    // Calcular métricas
+    const totalDecisions = l.totalDecisions || 0;
+    const tradesPct = totalDecisions > 0 ? ((l.tradesDecided || 0) / totalDecisions * 100).toFixed(1) : '0';
+    const skipsPct = totalDecisions > 0 ? ((l.skipsDecided || 0) / totalDecisions * 100).toFixed(1) : '0';
+
     st.innerHTML = `
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0">
-        <div class="stat-card"><div class="stat-val">${s.episodes}</div><div class="stat-label">Episodios</div></div>
-        <div class="stat-card"><div class="stat-val">${s.statesExplored}</div><div class="stat-label">Estados Explorados</div></div>
-        <div class="stat-card"><div class="stat-val">${s.explorationPct.toFixed(1)}%</div><div class="stat-label">Exploración</div></div>
+      <!-- Header principal -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card" style="border-left:3px solid #10b981">
+          <div class="stat-val">${s.episodes}</div>
+          <div class="stat-label">Episodios</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid #3b82f6">
+          <div class="stat-val">${s.statesExplored.toLocaleString()}</div>
+          <div class="stat-label">Estados Explorados</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid #8b5cf6">
+          <div class="stat-val">${s.explorationPct}%</div>
+          <div class="stat-label">Exploración</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid #f59e0b">
+          <div class="stat-val">${s.epsilon}</div>
+          <div class="stat-label">Epsilon</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid ${s.avgRecentReward >= 0 ? '#10b981' : '#ef4444'}">
+          <div class="stat-val ${s.avgRecentReward >= 0 ? 'pnl-pos' : 'pnl-neg'}">${s.avgRecentReward >= 0 ? '+' : ''}${s.avgRecentReward}</div>
+          <div class="stat-label">Reward Reciente</div>
+        </div>
       </div>
+
+      <!-- Decisiones del agente -->
+      <div style="margin:12px 0 8px;color:#10b981;font-weight:bold">📊 Decisiones del Agente</div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0">
-        <div class="stat-card"><div class="stat-val ${s.avgReward >= 0 ? 'pnl-pos' : 'pnl-neg'}">${s.avgReward >= 0 ? '+' : ''}${s.avgReward.toFixed(4)}</div><div class="stat-label">Reward Promedio</div></div>
-        <div class="stat-card"><div class="stat-val">${s.currentEpsilon.toFixed(3)}</div><div class="stat-label">Epsilon Actual</div></div>
-        <div class="stat-card"><div class="stat-val">${s.qTableSize}</div><div class="stat-label">Q-Table Size</div></div>
-        <div class="stat-card"><div class="stat-val">${d.hasQTable ? '✅' : '❌'}</div><div class="stat-label">Guardado</div></div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#3b82f6">${l.tradesDecided || 0}</div>
+          <div class="stat-label">Trades (${tradesPct}%)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#6b7280">${l.skipsDecided || 0}</div>
+          <div class="stat-label">Skips (${skipsPct}%)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#10b981">${l.correctTrades || 0}</div>
+          <div class="stat-label">Trades Correctos</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#ef4444">${l.missedTrades || 0}</div>
+          <div class="stat-label">Trades Perdidos</div>
+        </div>
+      </div>
+
+      <!-- Performance -->
+      <div style="margin:12px 0 8px;color:#f59e0b;font-weight:bold">🏆 Performance</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card">
+          <div class="stat-val" style="color:#10b981">${l.winRate || 0}%</div>
+          <div class="stat-label">Win Rate</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#10b981">${l.bigWins || 0}</div>
+          <div class="stat-label">Big Wins (+3%)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#ef4444">${l.bigLosses || 0}</div>
+          <div class="stat-label">Big Losses (-3%)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#f59e0b">🔥 ${l.maxWinStreak || 0}</div>
+          <div class="stat-label">Max Win Streak</div>
+        </div>
+      </div>
+
+      <!-- News Performance -->
+      <div style="margin:12px 0 8px;color:#ef4444;font-weight:bold">📰 News Performance</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card">
+          <div class="stat-val" style="color:#ef4444">${l.newsTrades || 0}</div>
+          <div class="stat-label">News Trades</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#10b981">${l.newsWins || 0}</div>
+          <div class="stat-label">News Wins</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#8b5cf6">${l.newsAccuracy || 0}%</div>
+          <div class="stat-label">News Accuracy</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#f59e0b">${l.fadeTrades || 0}</div>
+          <div class="stat-label">Fade Trades</div>
+        </div>
+      </div>
+
+      <!-- Status -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card">
+          <div class="stat-val">${d.hasQTable ? '✅' : '❌'}</div>
+          <div class="stat-label">Q-Table Guardada</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val">${s.mode}</div>
+          <div class="stat-label">Modo</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val">${s.features} / ${(s.maxStates || 1048576).toLocaleString()}</div>
+          <div class="stat-label">Features / Estados</div>
+        </div>
       </div>
     `;
   } catch {}

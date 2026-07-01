@@ -22,6 +22,31 @@ let episodeCount = 0;
 let totalReward = 0;
 let winHistory = [];
 
+// ── LEARNING STATS — TRACKING DETALLADO ─────────────────────────
+let learningStats = {
+  totalDecisions: 0,
+  tradesDecided: 0,
+  skipsDecided: 0,
+  correctTrades: 0,
+  correctSkips: 0,
+  missedTrades: 0,
+  bigWins: 0,
+  bigLosses: 0,
+  newsTrades: 0,
+  newsWins: 0,
+  fadeTrades: 0,
+  fadeWins: 0,
+  maxWinStreak: 0,
+  maxLoseStreak: 0,
+  currentWinStreak: 0,
+  currentLoseStreak: 0,
+  confidenceHistory: [],
+  rewardHistory: [],
+  lastDecision: null,
+  lastNewsScore: 0,
+  trainingHistory: [],
+};
+
 // ── HIPERPARAMETROS — MODO ELITE HUNTER ────────────────────────
 const PARAMS = {
   learningRate: 0.12,
@@ -239,10 +264,25 @@ export function trainFromHistory(trades, candlesBySymTf) {
 
   let epsilon = PARAMS.epsilonStart;
   let correctSkips = 0, correctTrades = 0, missedTrades = 0, totalDecisions = 0;
-  let bigWins = 0, bigLosses = 0, newsTrades = 0;
+  let bigWins = 0, bigLosses = 0, newsTrades = 0, newsWins = 0;
+  let fadeTrades = 0, fadeWins = 0;
+  let winStreak = 0, loseStreak = 0, maxWinStreak = 0, maxLoseStreak = 0;
+
+  // Reset learning stats
+  learningStats = {
+    totalDecisions: 0, tradesDecided: 0, skipsDecided: 0,
+    correctTrades: 0, correctSkips: 0, missedTrades: 0,
+    bigWins: 0, bigLosses: 0, newsTrades: 0, newsWins: 0,
+    fadeTrades: 0, fadeWins: 0,
+    maxWinStreak: 0, maxLoseStreak: 0,
+    currentWinStreak: 0, currentLoseStreak: 0,
+    confidenceHistory: [], rewardHistory: [],
+    lastDecision: null, lastNewsScore: 0, trainingHistory: [],
+  };
 
   for (let ep = 0; ep < 150; ep++) {
     let epReward = 0;
+    let epTrades = 0, epSkips = 0, epWins = 0;
 
     for (const trade of trades) {
       const key = `${trade.sym}-${trade.tf}`;
@@ -258,22 +298,63 @@ export function trainFromHistory(trades, candlesBySymTf) {
       const won = trade.result === 'WIN';
       const pnl = trade.pnl || 0;
 
-      // Detectar si había noticia en el momento del trade
       const newsAtEntry = detectNews(candles.slice(0, entryIdx + 1));
-      if (newsAtEntry.score >= 25) newsTrades++;
+      const isNews = newsAtEntry.score >= 25;
+      const isFade = newsAtEntry.isFade;
 
       let reward;
       if (action === 0) {
+        // SKIP
         reward = calcSkipReward(won, pnl, newsAtEntry.score);
-        if (!won) correctSkips++;
-        else missedTrades++;
+        learningStats.skipsDecided++;
+        epSkips++;
+        if (!won) {
+          correctSkips++;
+          learningStats.correctSkips++;
+        } else {
+          missedTrades++;
+          learningStats.missedTrades++;
+        }
       } else {
+        // TRADE
         reward = calcReward(won, pnl, 1, newsAtEntry);
+        learningStats.tradesDecided++;
+        epTrades++;
         if (won) {
           correctTrades++;
-          if (Math.abs(pnl) >= 0.03) bigWins++;
+          learningStats.correctTrades++;
+          winStreak++;
+          loseStreak = 0;
+          maxWinStreak = Math.max(maxWinStreak, winStreak);
+          epWins++;
+          if (Math.abs(pnl) >= 0.03) {
+            bigWins++;
+            learningStats.bigWins++;
+          }
+          if (isNews) {
+            newsTrades++;
+            newsWins++;
+            learningStats.newsTrades++;
+            learningStats.newsWins++;
+          }
+          if (isFade) {
+            fadeTrades++;
+            fadeWins++;
+            learningStats.fadeTrades++;
+            learningStats.fadeWins++;
+          }
         } else {
-          if (Math.abs(pnl) >= 0.03) bigLosses++;
+          loseStreak++;
+          winStreak = 0;
+          maxLoseStreak = Math.max(maxLoseStreak, loseStreak);
+          if (Math.abs(pnl) >= 0.03) {
+            bigLosses++;
+            learningStats.bigLosses++;
+          }
+          if (isNews) {
+            newsTrades++;
+            learningStats.newsTrades++;
+          }
         }
       }
 
@@ -282,6 +363,23 @@ export function trainFromHistory(trades, candlesBySymTf) {
 
       const nextState = marketToState(candles.slice(0, Math.min(entryIdx + 50, candles.length)));
       updateQ(state, action, reward, nextState);
+    }
+
+    // Track epoch stats
+    learningStats.totalDecisions = totalDecisions;
+    learningStats.maxWinStreak = maxWinStreak;
+    learningStats.maxLoseStreak = maxLoseStreak;
+    learningStats.currentWinStreak = winStreak;
+    learningStats.currentLoseStreak = loseStreak;
+
+    if (ep % 10 === 0) {
+      learningStats.trainingHistory.push({
+        episode: ep,
+        reward: +epReward.toFixed(2),
+        winRate: epTrades > 0 ? +((epWins / epTrades) * 100).toFixed(1) : 0,
+        trades: epTrades,
+        skips: epSkips,
+      });
     }
 
     epsilon = Math.max(PARAMS.epsilonMin, epsilon * PARAMS.epsilonDecay);
@@ -302,6 +400,11 @@ export function trainFromHistory(trades, candlesBySymTf) {
     bigWins,
     bigLosses,
     newsTrades,
+    newsWins,
+    fadeTrades,
+    fadeWins,
+    maxWinStreak,
+    maxLoseStreak,
     epsilon: +epsilon.toFixed(3),
     statesExplored: getExploredStates(),
     statesTotal: NUM_STATES,
@@ -447,6 +550,14 @@ export function getAgentStats() {
 
   const explored = getExploredStates();
 
+  // Calcular win rate
+  const totalTrades = learningStats.correctTrades + (learningStats.tradesDecided - learningStats.correctTrades);
+  const winRate = totalTrades > 0 ? (learningStats.correctTrades / totalTrades * 100) : 0;
+
+  // Calcular accuracy de noticias
+  const newsAccuracy = learningStats.newsTrades > 0
+    ? (learningStats.newsWins / learningStats.newsTrades * 100) : 0;
+
   return {
     episodes: episodeCount,
     totalReward: +totalReward.toFixed(2),
@@ -458,6 +569,32 @@ export function getAgentStats() {
     mode: 'ELITE HUNTER v8.0',
     features: 20,
     maxStates: NUM_STATES,
+    // Learning stats
+    learning: {
+      totalDecisions: learningStats.totalDecisions,
+      tradesDecided: learningStats.tradesDecided,
+      skipsDecided: learningStats.skipsDecided,
+      correctTrades: learningStats.correctTrades,
+      correctSkips: learningStats.correctSkips,
+      missedTrades: learningStats.missedTrades,
+      bigWins: learningStats.bigWins,
+      bigLosses: learningStats.bigLosses,
+      winRate: +winRate.toFixed(1),
+      // News stats
+      newsTrades: learningStats.newsTrades,
+      newsWins: learningStats.newsWins,
+      newsAccuracy: +newsAccuracy.toFixed(1),
+      fadeTrades: learningStats.fadeTrades,
+      fadeWins: learningStats.fadeWins,
+      // Streaks
+      maxWinStreak: learningStats.maxWinStreak,
+      maxLoseStreak: learningStats.maxLoseStreak,
+      currentWinStreak: learningStats.currentWinStreak,
+      currentLoseStreak: learningStats.currentLoseStreak,
+      // History
+      trainingHistory: learningStats.trainingHistory,
+      rewardHistory: winHistory.slice(-20),
+    },
   };
 }
 
