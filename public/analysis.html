@@ -447,23 +447,30 @@ function detectSwings(candles, lb) {
 function runElliott() {
   if(candles.length<40){ewPats=[];updateEWBadge();return;}
 
-  // Buscar patrones en múltiples escalas para ver TODOS los grados
+  // Buscar patrones en múltiples escalas y lookbacks
   const scales = [60, 100, 180, 300, 500];
+  const lookbacks = [3, 4, 5, 6];
   const found = [];
 
   for (const sliceLen of scales) {
     const slice = candles.slice(-Math.min(sliceLen, candles.length));
     if(slice.length < 30) continue;
-    const lb = Math.max(2, Math.floor(slice.length / 25));
-    const sw = detectSwings(slice, lb);
-    const pat = findPatternInSwings(sw);
-    if(pat) {
-      pat.scale = sliceLen; // Guardar la escala para referencia
-      found.push(pat);
+
+    let bestForScale = null;
+    for (const lb of lookbacks) {
+      if (slice.length < lb * 3) continue;
+      const sw = detectSwings(slice, lb);
+      if (sw.length < 5) continue;
+      const pat = findPatternInSwings(sw);
+      if(pat && (!bestForScale || pat.confidence > bestForScale.confidence)) {
+        bestForScale = pat;
+        bestForScale.scale = sliceLen;
+        bestForScale.lb = lb;
+      }
     }
+    if (bestForScale) found.push(bestForScale);
   }
 
-  // Eliminar duplicados (mismo dir + mismos puntos base)
   ewPats = found;
   updateEWBadge();
 }
@@ -479,104 +486,66 @@ function findPatternInSwings(sw) {
 
     const up = w[0].t==='L';
 
-    // ═══ IMPULSE WAVES (PRIORIDAD MÁXIMA) ════════════════════════
+    // ═══ IMPULSE (5-wave motive) ══════════════════════════════════
     if(up && w.length>=5){
       const w1=w[1].p-w[0].p; if(w1<=0)continue;
-      const w2r=(w[1].p-w[2].p)/w1; if(w2r<.18||w2r>.92)continue;
-      const w3=w[3].p-w[2].p; if(w3<w1*.55)continue;
-      const w4r=(w[3].p-w[4].p)/w3; if(w4r<.10||w4r>.78)continue;
+      const w2r=(w[1].p-w[2].p)/w1;
+      const w3=w[3].p-w[2].p; if(w3<=0)continue;
+      const w4r=(w[3].p-w[4].p)/w3;
+      // Reglas básicas: w4 no solapa w1, w2 no solapa w0, w4 no se va a cero
+      if(w2r<0||w2r>1)continue;
+      if(w4r<0||w4r>0.85)continue;
       if(w[4].p<=w[1].p)continue;
-      const wn=w.length>=6?5:4;
-      const conf=Math.min(1,(w3/w1+(1-w4r))/2);
+      const conf=Math.min(1, (w3/w1 + (1-w4r)) / 2);
       if(!bestImpulse || conf>bestImpulse.confidence)
-        bestImpulse={pts:w.slice(0,Math.min(6,w.length)),dir:'up',type:'impulse',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p+w1*1.618,confidence:conf};
+        bestImpulse={pts:w.slice(0,Math.min(6,w.length)),dir:'up',type:'impulse',w1,w3,w2r,w4r,wn:Math.min(5,w.length-1),w5tgt:w[4].p+w1*0.618,confidence:conf};
       continue;
     }
     if(!up && w.length>=5){
       const w1=w[0].p-w[1].p; if(w1<=0)continue;
-      const w2r=(w[2].p-w[1].p)/w1; if(w2r<.18||w2r>.92)continue;
-      const w3=w[2].p-w[3].p; if(w3<w1*.55)continue;
-      const w4r=(w[4].p-w[3].p)/w3; if(w4r<.10||w4r>.78)continue;
+      const w2r=(w[2].p-w[1].p)/w1;
+      const w3=w[2].p-w[3].p; if(w3<=0)continue;
+      const w4r=(w[4].p-w[3].p)/w3;
+      if(w2r<0||w2r>1)continue;
+      if(w4r<0||w4r>0.85)continue;
       if(w[4].p>=w[1].p)continue;
-      const wn=w.length>=6?5:4;
-      const conf=Math.min(1,(w3/w1+(1-w4r))/2);
+      const conf=Math.min(1, (w3/w1 + (1-w4r)) / 2);
       if(!bestImpulse || conf>bestImpulse.confidence)
-        bestImpulse={pts:w.slice(0,Math.min(6,w.length)),dir:'dn',type:'impulse',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p-w1*1.618,confidence:conf};
+        bestImpulse={pts:w.slice(0,Math.min(6,w.length)),dir:'dn',type:'impulse',w1,w3,w2r,w4r,wn:Math.min(5,w.length-1),w5tgt:w[4].p-w1*0.618,confidence:conf};
       continue;
     }
 
-    // ═══ CORRECTIVE PATTERNS (solo si no hay impulse en esta posición) ═══
+    // ═══ CORRECTIVE PATTERNS ═══════════════════════════════════════
 
-    // Zigzag
-    if(w.length>=3) {
-      const w0=w[0], w1w=w[1], w2=w[2];
-      if(w0.t==='L'&&w1w.t==='H'&&w2.t==='L') {
-        const waveA=Math.abs(w0.p-w1w.p);
-        const waveB=Math.abs(w2.p-w1w.p);
-        if(waveA>0) {
-          const ratio=waveB/waveA;
-          if(ratio>=0.382&&ratio<=0.786) {
-            const conf=0.6+(ratio>0.5?0.2:0);
-            if(!bestCorrective || conf>bestCorrective.confidence)
-              bestCorrective={pts:w.slice(0,3),dir:'dn',type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p-waveA*1.0,confidence:conf};
-          }
-        }
-      }
-      if(w0.t==='H'&&w1w.t==='L'&&w2.t==='H') {
-        const waveA=Math.abs(w0.p-w1w.p);
-        const waveB=Math.abs(w2.p-w1w.p);
-        if(waveA>0) {
-          const ratio=waveB/waveA;
-          if(ratio>=0.382&&ratio<=0.786) {
-            const conf=0.6+(ratio>0.5?0.2:0);
-            if(!bestCorrective || conf>bestCorrective.confidence)
-              bestCorrective={pts:w.slice(0,3),dir:'up',type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p+waveA*1.0,confidence:conf};
-          }
-        }
-      }
-    }
-
-    // Flat
+    // Zigzag: A-B-C where B retraces 38%-78% of A
     if(w.length>=3 && !bestCorrective) {
       const w0=w[0], w1w=w[1], w2=w[2];
-      if(w0.t==='L'&&w1w.t==='H'&&w2.t==='L') {
+      if(w0.t!==w1w.t && w1w.t!==w2.t) {
         const waveA=Math.abs(w0.p-w1w.p);
         const waveB=Math.abs(w2.p-w1w.p);
-        if(waveA>0&&waveB/waveA>=0.90&&waveB/waveA<=1.05) {
-          bestCorrective={pts:w.slice(0,3),dir:'up',type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p+waveA*1.2,confidence:0.55};
-        }
-      }
-      if(w0.t==='H'&&w1w.t==='L'&&w2.t==='H') {
-        const waveA=Math.abs(w0.p-w1w.p);
-        const waveB=Math.abs(w2.p-w1w.p);
-        if(waveA>0&&waveB/waveA>=0.90&&waveB/waveA<=1.05) {
-          bestCorrective={pts:w.slice(0,3),dir:'dn',type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p-waveA*1.2,confidence:0.55};
+        if(waveA>0) {
+          const ratio=waveB/waveA;
+          if(ratio>=0.3&&ratio<=1.0) {
+            const dir = w0.t==='L' ? (w2.p<w0.p?'dn':'up') : (w2.p>w0.p?'up':'dn');
+            bestCorrective={pts:w.slice(0,3),dir,type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p+(dir==='up'?waveA:-waveA),confidence:0.5+Math.min(0.3,Math.abs(ratio-0.618)*2)};
+          }
         }
       }
     }
 
-    // Triangle
-    if(w.length>=5 && !bestCorrective) {
-      const isAlt = w.every((s,j)=>j===0||s.t!==w[j-1].t);
-      if(isAlt) {
-        const pcts=[];
-        let valid=true;
-        for(let j=2;j<5;j++){
-          const range=Math.abs(w[j].p-w[j-1].p);
-          const prevRange=Math.abs(w[j-1].p-w[j-2].p);
-          if(prevRange>0) pcts.push(range/prevRange);
-        }
-        if(pcts.length>=2) {
-          for(let j=1;j<pcts.length;j++){if(pcts[j]>=pcts[j-1]){valid=false;break;}}
-          if(valid&&pcts[0]<1) {
-            const isAscending=w[0].p>w[2].p;
-            bestCorrective={pts:w.slice(0,5),dir:isAscending?'up':'dn',type:'triangle',convergences:pcts,wn:5,w5tgt:w[4].p+(isAscending?1:-1)*Math.abs(w[0].p-w[4].p)*0.5,confidence:0.5+(1-pcts[pcts.length-1])*0.3};
-          }
+    // Flat: B retraces 90%-105% of A (near equality)
+    if(w.length>=3 && !bestCorrective) {
+      const w0=w[0], w1w=w[1], w2=w[2];
+      if(w0.t!==w1w.t && w1w.t!==w2.t) {
+        const waveA=Math.abs(w0.p-w1w.p);
+        const waveB=Math.abs(w2.p-w1w.p);
+        if(waveA>0&&waveB/waveA>=0.88&&waveB/waveA<=1.08) {
+          const dir = w0.t==='L' ? 'up' : 'dn';
+          bestCorrective={pts:w.slice(0,3),dir,type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p+(dir==='up'?waveA*1.2:-waveA*1.2),confidence:0.5};
         }
       }
     }
   }
-  // Prioridad: impulse > corrective
   return bestImpulse || bestCorrective || null;
 }
 
