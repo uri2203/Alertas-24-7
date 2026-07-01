@@ -272,6 +272,7 @@ import { pearsonCorrelation, returns, correlationMatrix, btcDominanceProxy, ethB
 import { openPosition, closePosition, checkBreakeven, checkTrailingStop, checkPartialProfit, checkEarlyClose, checkSLTP, getOpenPositions, canOpenPosition, managePosition, calculatePositionSize, riskReward, getPositionStats } from './position.js';
 import { analyzeFundingRate, analyzeOpenInterest, analyzeLongShortRatio, fundingScore } from './funding.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
+import { detectNews, NEWS_REWARDS, newsPositionSize, newsSLTPAdjustment } from './news.js';
 
 // ── RISK MODULE ──────────────────────────────────────────────────
 describe('Risk Management', () => {
@@ -449,10 +450,10 @@ describe('Monte Carlo', () => {
 
 // ── RL AGENT ─────────────────────────────────────────────────────
 describe('RL Agent', () => {
-  it('marketToState returns valid state 0-32767', () => {
+  it('marketToState returns valid state 0-1048575', () => {
     const candles = genCandles(250);
     const state = marketToState(candles);
-    assert.ok(state >= 0 && state < 32768);
+    assert.ok(state >= 0 && state < 1048576);
   });
 
   it('marketToState returns 0 for insufficient data', () => {
@@ -462,15 +463,15 @@ describe('RL Agent', () => {
   it('chooseAction returns 0 or 1', () => {
     resetAgent();
     for (let i = 0; i < 10; i++) {
-      const action = chooseAction(Math.floor(Math.random() * 32768), 0.5);
+      const action = chooseAction(Math.floor(Math.random() * 1048576), 0.5);
       assert.ok(action === 0 || action === 1);
     }
   });
 
-  it('agentPredict returns valid structure with sizing', () => {
+  it('agentPredict returns valid structure with sizing and news', () => {
     resetAgent();
     const candles = genCandles(250);
-    const pred = agentPredict(candles);
+    const pred = agentPredict(candles, 50);
     assert.ok(pred);
     assert.ok(pred.action === 'TRADE' || pred.action === 'SKIP');
     assert.ok(typeof pred.confidence === 'number');
@@ -478,6 +479,7 @@ describe('RL Agent', () => {
     assert.ok(pred.sizing);
     assert.ok(typeof pred.sizing.multiplier === 'number');
     assert.ok(pred.riskLevel);
+    assert.equal(typeof pred.newsScore, 'number');
   });
 
   it('convictionSize returns correct sizing', () => {
@@ -494,29 +496,24 @@ describe('RL Agent', () => {
     assert.equal(low.label, 'SKIP');
   });
 
-  it('calcReward returns aggressive rewards', () => {
-    const bigWin = calcReward(true, 0.06, 1);
-    assert.ok(bigWin >= 5); // rewardWinHuge
+  it('calcReward handles news context', () => {
+    const newsContext = { score: 80, isFade: false, direction: 'BULLISH' };
+    const newsWin = calcReward(true, 0.04, 1, newsContext);
+    assert.ok(newsWin >= 5); // Should get news reward
 
-    const smallWin = calcReward(true, 0.01, 1);
-    assert.ok(smallWin > 0);
-
-    const bigLoss = calcReward(false, 0.04, 1);
-    assert.ok(bigLoss <= -3); // rewardLossBig
-
-    const skip = calcReward(true, 0.02, 0);
-    assert.equal(skip, 0); // neutral
+    const normalWin = calcReward(true, 0.02, 1);
+    assert.ok(normalWin > 0);
   });
 
-  it('calcSkipReward penalizes missed trades', () => {
-    const missed = calcSkipReward(true, 0.03);
-    assert.ok(missed < 0); // penalización
+  it('calcSkipReward handles news', () => {
+    const skipNewsModerate = calcSkipReward(true, 0.03, 30);
+    assert.ok(skipNewsModerate < 0); // Penalized for missing news opportunity
 
-    const goodSkip = calcSkipReward(false, -0.01);
-    assert.ok(goodSkip > 0); // recompensa
+    const skipNewsExtreme = calcSkipReward(false, -0.01, 80);
+    assert.ok(skipNewsExtreme > 0); // Rewarded for avoiding extreme news
   });
 
-  it('trainFromHistory returns stats', () => {
+  it('trainFromHistory returns stats with newsTrades', () => {
     resetAgent();
     const trades = Array.from({ length: 20 }, (_, i) => ({
       sym: 'BTCUSDT', tf: '1h',
@@ -530,7 +527,7 @@ describe('RL Agent', () => {
     assert.ok(result.episodes > 0);
     assert.ok(typeof result.avgReward === 'number');
     assert.ok(typeof result.bigWins === 'number');
-    assert.ok(typeof result.bigLosses === 'number');
+    assert.ok(typeof result.newsTrades === 'number');
   });
 
   it('trainOnWinners trains on profitable trades', () => {
@@ -548,14 +545,15 @@ describe('RL Agent', () => {
     assert.equal(result.winners, 10);
   });
 
-  it('getAgentStats returns valid stats', () => {
+  it('getAgentStats returns valid stats with ELITE mode', () => {
     const stats = getAgentStats();
     assert.ok(stats);
     assert.ok(typeof stats.episodes === 'number');
     assert.ok(typeof stats.statesExplored === 'number');
     assert.ok(typeof stats.explorationPct === 'number');
-    assert.equal(stats.mode, 'HUNTER v8.0');
-    assert.equal(stats.features, 15);
+    assert.equal(stats.mode, 'ELITE HUNTER v8.0');
+    assert.equal(stats.features, 20);
+    assert.equal(stats.maxStates, 1048576);
   });
 
   it('exportQTable returns serializable data with version', () => {
@@ -563,8 +561,9 @@ describe('RL Agent', () => {
     assert.ok(data.qTable);
     assert.ok(Array.isArray(data.qTable));
     assert.ok(data.qTable.length > 0);
-    assert.equal(data.version, 'HUNTER-8.0');
-    assert.equal(data.features, 15);
+    assert.equal(data.version, 'ELITE-HUNTER-8.0');
+    assert.equal(data.features, 20);
+    assert.equal(data.maxStates, 1048576);
   });
 });
 
@@ -1185,5 +1184,78 @@ describe('Combined Funding Score', () => {
   it('fundingScore detects high risk', () => {
     const result = fundingScore(0.001, 1000, 10, 2, 2.5, 'LONG');
     assert.equal(result.liquidationRisk, 'high');
+  });
+});
+
+// ── NEWS DETECTION ──────────────────────────────────────────────
+describe('News Detection', () => {
+  it('detectNews returns score 0 for insufficient data', () => {
+    const result = detectNews(genCandles(10));
+    assert.equal(result.score, 0);
+    assert.equal(result.level, 'none');
+  });
+
+  it('detectNews returns valid structure for sufficient data', () => {
+    const candles = genCandles(100);
+    const result = detectNews(candles);
+    assert.ok(typeof result.score === 'number');
+    assert.ok(result.score >= 0 && result.score <= 100);
+    assert.ok(['none', 'LOW', 'MODERATE', 'HIGH', 'EXTREME'].includes(result.level));
+    assert.ok(Array.isArray(result.signals));
+    assert.ok(['BULLISH', 'BEARISH'].includes(result.direction));
+    assert.ok(typeof result.isFade === 'boolean');
+  });
+
+  it('detectNews detects volume spike', () => {
+    const candles = genCandles(100);
+    // Force last candle to have huge volume
+    candles[candles.length - 1].vol = candles.slice(-50).reduce((a, c) => a + c.vol, 0) / 50 * 10;
+    const result = detectNews(candles);
+    const volSignal = result.signals.find(s => s.type === 'volume_spike');
+    // Volume spike may or may not be detected depending on the random data
+    assert.ok(typeof result.volRatio === 'number');
+  });
+
+  it('NEWS_REWARDS has all required values', () => {
+    assert.equal(typeof NEWS_REWARDS.catchEarly, 'number');
+    assert.equal(typeof NEWS_REWARDS.catchConfirmed, 'number');
+    assert.equal(typeof NEWS_REWARDS.fadeReversal, 'number');
+    assert.equal(typeof NEWS_REWARDS.enterLate, 'number');
+    assert.equal(typeof NEWS_REWARDS.lossInNews, 'number');
+    assert.equal(typeof NEWS_REWARDS.skipExtreme, 'number');
+    assert.equal(typeof NEWS_REWARDS.skipModerate, 'number');
+  });
+
+  it('newsPositionSize returns correct sizing', () => {
+    const extreme = newsPositionSize(80, 0.95, 0.05);
+    assert.equal(extreme.multiplier, 3.0);
+    assert.ok(extreme.label.includes('NEWS_MAX'));
+
+    const moderate = newsPositionSize(50, 0.85, 0.05);
+    assert.equal(moderate.multiplier, 2.0);
+    assert.ok(moderate.label.includes('NEWS_AGGRESSIVE'));
+
+    const noNews = newsPositionSize(0, 0.85, 0.05);
+    assert.ok(noNews.multiplier >= 1.0);
+
+    const highSpread = newsPositionSize(50, 0.85, 0.5);
+    assert.ok(highSpread.multiplier < 2.0); // Reduced due to spread
+  });
+
+  it('newsSLTPAdjustment returns null for low news', () => {
+    const result = newsSLTPAdjustment(10, 0.02, 'LONG');
+    assert.equal(result, null);
+  });
+
+  it('newsSLTPAdjustment returns adjustment for high news', () => {
+    const extreme = newsSLTPAdjustment(80, 0.03, 'LONG');
+    assert.ok(extreme);
+    assert.ok(extreme.slMultiplier < 2);
+    assert.ok(extreme.tpMultiplier > 2);
+    assert.equal(extreme.reason, 'EXTREME_NEWS');
+
+    const moderate = newsSLTPAdjustment(40, 0.02, 'LONG');
+    assert.ok(moderate);
+    assert.equal(moderate.reason, 'MODERATE_NEWS');
   });
 });

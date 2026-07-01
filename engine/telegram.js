@@ -16,12 +16,30 @@ export function buildAlertMessage(sym, tf, sig) {
   // Quality badge
   const qualityEmoji = sig.quality === 'elite' ? '🏆' : '💪';
 
+  // News alert
+  const newsScore = sig.newsScore || 0;
+  const newsLine = newsScore >= 75
+    ? `\n🚨 <b>NOTICIA EXTREMA:</b> ${newsScore}/100 — Movimiento violento detectado`
+    : newsScore >= 50
+    ? `\n⚡ <b>NOTICIA ALTA:</b> ${newsScore}/100 — Alta volatilidad`
+    : newsScore >= 25
+    ? `\n📰 <b>Noticia moderada:</b> ${newsScore}/100`
+    : '';
+
   // Agent sizing
   const sizing = sig.agentSizing || { multiplier: 1.0, label: 'NORMAL' };
-  const sizingLine = sizing.multiplier >= 2.0
+  const sizingLine = sizing.multiplier >= 2.5
+    ? `\n🦈 <b>ELITE HUNTER:</b> ${sizing.label} (${sizing.multiplier}x posición)`
+    : sizing.multiplier >= 2.0
     ? `\n🦈 <b>HUNTER MODE:</b> ${sizing.label} (${sizing.multiplier}x posición)`
     : sizing.multiplier >= 1.5
     ? `\n🎯 <b>Conviction:</b> ${sizing.label} (${sizing.multiplier}x)`
+    : '';
+
+  // SL/TP adjustment for news
+  const newsAdj = sig.newsSLAdjustment;
+  const newsAdjLine = newsAdj
+    ? `\n⚡ <b>News SL/TP:</b> ${newsAdj.label}`
     : '';
 
   // Macro
@@ -50,19 +68,19 @@ export function buildAlertMessage(sym, tf, sig) {
     : '';
 
   return `${emoji} <b>SEÑAL ${sig.signal} — ${sym} ${tf.toUpperCase()}</b>
-${qualityEmoji} <b>Calidad:</b> ${sig.quality?.toUpperCase()} (${sig.score}/100)${sizingLine}
+${qualityEmoji} <b>Calidad:</b> ${sig.quality?.toUpperCase()} (${sig.score}/100)${sizingLine}${newsLine}
 
 🕐 <b>Hora MX:</b> ${time}${macroLine}${pullbackLine}${regimeLine}${mlLine}${reasonsLine}
 
 💰 <b>Niveles:</b>
   • Entrada:  <code>${fp(sig.entry)}</code>
-  • Stop:     <code>${fp(sig.sl)}</code>
+  • Stop:     <code>${fp(sig.sl)}</code>${newsAdjLine}
   • Target 1: <code>${fp(sig.t1)}</code>
   • Target 2: <code>${fp(sig.t2)}</code>
   • R:R:      <code>${sig.rr || '—'}</code>
   • ATR(14):  <code>${fp(sig.atr)}</code>
 
-⚠️ <i>Sistema automático v8.0 HUNTER. Valida siempre.</i>`;
+⚠️ <i>Sistema automático v8.0 ELITE HUNTER. Valida siempre.</i>`;
 }
 
 export async function sendTelegram(token, chatId, text) {

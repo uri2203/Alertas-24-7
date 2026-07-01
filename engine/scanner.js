@@ -2,6 +2,7 @@
 //  engine/scanner.js  —  Trading Dashboard PRO v8.0
 //  Motor de Escaneo Autónomo 24/7 — Structure-Based Trading
 // ═══════════════════════════════════════════════════════════════
+import { detectNews, newsSLTPAdjustment } from './news.js';
 import { scoreSignal, TF_CONFIG, TF_PARENT } from './signals.js';
 import { sendTelegram, buildAlertMessage }    from './telegram.js';
 import { trackSignal, evaluatePending }       from './tracker.js';
@@ -9,7 +10,7 @@ import { detectRegime, regimeScoreAdjustment } from './regime.js';
 import { extractFeatures, LogisticClassifier } from './ml.js';
 import { calcPositionSize, kellyFraction } from './risk.js';
 import { geneticOptimize } from './optimizer.js';
-import { agentPredict, trainFromHistory, trainOnWinners, getAgentStats, exportQTable, importQTable } from './agent.js';
+import { agentPredict, trainFromHistory, trainOnWinners, trainOnNews, getAgentStats, exportQTable, importQTable } from './agent.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 import { checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
 import { analyzeCorrelation } from './correlation.js';
@@ -307,6 +308,7 @@ async function trainMLClassifier(config) {
       STATE.agent.trained = true;
       console.log(`[AGENT] Entrenado: ${agentResult.episodes} episodes, skip=${agentResult.skipAccuracy}%, trade=${agentResult.tradeAccuracy}%`);
       if (agentResult.bigWins) console.log(`[AGENT] Big wins: ${agentResult.bigWins}, Big losses: ${agentResult.bigLosses}`);
+      if (agentResult.newsTrades) console.log(`[AGENT] News trades detectados: ${agentResult.newsTrades}`);
     }
 
     // Entrenar en trades ganadores REALES (el tiburón aprende de sus presas)
@@ -315,6 +317,27 @@ async function trainMLClassifier(config) {
       const hunterResult = trainOnWinners(winningTrades, candlesCache);
       if (hunterResult) {
         console.log(`[HUNTER] Entrenado en ${hunterResult.winners} trades ganadores (+3%+). Sample: ${hunterResult.trainedOn}`);
+      }
+    }
+
+    // Entrenar en trades de NOTICIAS (el tiburón de élite caza en tormentas)
+    const { detectNews } = await import('./news.js');
+    const newsTrades = [];
+    for (const trade of allTrades) {
+      const key = `${trade.sym}-${trade.tf}`;
+      const candles = candlesCache[key];
+      if (!candles || candles.length < 200) continue;
+      const entryIdx = candles.findIndex(c => c.time >= trade.entryTime);
+      if (entryIdx < 200) continue;
+      const news = detectNews(candles.slice(0, entryIdx + 1));
+      if (news.score >= 25) {
+        newsTrades.push({ ...trade, newsScore: news.score });
+      }
+    }
+    if (newsTrades.length > 0) {
+      const eliteResult = trainOnNews(newsTrades, candlesCache);
+      if (eliteResult) {
+        console.log(`[ELITE] Entrenado en ${eliteResult.newsTrades} trades de noticias. Sample: ${eliteResult.trainedOn}`);
       }
     }
 
@@ -523,12 +546,22 @@ async function runCycle(config) {
       }
       sentThisCycle.set(groupKey, { dir: structResult.direction, score: structResult.score, sym });
 
-      // RL Agent — MODO HUNTER
+      // RL Agent — MODO ELITE HUNTER
       STATE.agent.decisions++;
       const entryCandles = candlesByTF[entryTF];
       let agentSizing = null;
+      let newsContext = null;
+
+      // Detectar noticia en el momento actual
+      if (entryCandles) {
+        newsContext = detectNews(entryCandles);
+        if (newsContext.score >= 10) {
+          console.log(`   [NEWS] ${sym} — Score: ${newsContext.score}/100 (${newsContext.level}) | Dir: ${newsContext.direction} | Vol: ${newsContext.volRatio}x`);
+        }
+      }
+
       if (STATE.agent.trained && entryCandles) {
-        const agentDec = agentPredict(entryCandles);
+        const agentDec = agentPredict(entryCandles, newsContext?.score || 0);
         if (agentDec.action === 'SKIP') {
           STATE.agent.skipped++;
           console.log(`   [AGENT] ${sym} SKIP (${(agentDec.confidence * 100).toFixed(0)}%) — ${agentDec.riskLevel}`);
@@ -536,7 +569,7 @@ async function runCycle(config) {
         }
         STATE.agent.traded++;
         agentSizing = agentDec.sizing;
-        console.log(`   [AGENT] ${sym} TRADE — confidence: ${(agentDec.confidence * 100).toFixed(0)}% | sizing: ${agentDec.sizing.label} (${agentDec.sizing.multiplier}x)`);
+        console.log(`   [AGENT] ${sym} TRADE — confidence: ${(agentDec.confidence * 100).toFixed(0)}% | sizing: ${agentDec.sizing.label} (${agentDec.sizing.multiplier}x) | ${agentDec.riskLevel}`);
       }
 
       // ═══ CANDIDATO VÁLIDO ═════════════════════════════════════
@@ -551,6 +584,7 @@ async function runCycle(config) {
         entryTF,
         candles: entryCandles,
         agentSizing,
+        newsContext,
       });
 
       console.log(`   [STRUCT] ${sym} ${structResult.direction} ${structResult.score}/100 (${structResult.quality}) — ${structResult.reasons.join(', ')}${obConfluence?.isStrong ? ' [OB CONFLUENCE]' : ''}`);
@@ -599,13 +633,13 @@ async function runCycle(config) {
   const toSend = BEST_OF_CYCLE ? [candidates[0]] : candidates.filter(c => c.score >= 85);
 
   for (const cand of toSend) {
-    const { sym, direction, score, quality, reasons, multiTF, indicators, entryTF, candles, agentSizing } = cand;
+    const { sym, direction, score, quality, reasons, multiTF, indicators, entryTF, candles, agentSizing, newsContext } = cand;
 
     // Construir señal compatible con el sistema existente
     const sig = {
       signal: direction,
       dir: direction === 'LONG' ? 'up' : 'down',
-      score: score / 100 * 14, // Convertir a escala 0-14 para compatibilidad
+      score: score / 100 * 14,
       quality,
       reasons,
       macro: multiTF.macroDirection,
@@ -614,7 +648,18 @@ async function runCycle(config) {
       mlConfidence: null,
       regime: null,
       agentSizing: agentSizing || { multiplier: 1.0, label: 'NORMAL' },
+      newsScore: newsContext?.score || 0,
+      newsLevel: newsContext?.level || 'none',
     };
+
+    // Ajustar SL/TP si hay noticia
+    if (newsContext && newsContext.score >= 25) {
+      const newsAdj = newsSLTPAdjustment(newsContext.score, indicators?.atrPct || 0, direction);
+      if (newsAdj) {
+        sig.newsSLAdjustment = newsAdj;
+        reasons.push(`news_${newsAdj.reason.toLowerCase()}`);
+      }
+    }
 
     // Track
     trackSignal(sym, entryTF, direction, sig.score, candles);
