@@ -45,12 +45,12 @@ const alertCooldown  = {};
 const lastDirSent    = {};
 const mayorCache     = {};
 const MAYOR_CACHE_MS = 3 * 60 * 1000;
-const ANTI_CONTRA_MS = 60 * 60 * 1000; // 60 min (era 15)
+const ANTI_CONTRA_MS = 4 * 60 * 60 * 1000; // 4 horas (calidad > cantidad)
 const OPT_RETRAIN_MS = 6 * 60 * 60 * 1000;
 
 // ═══ CONFIGURACIÓN DE CALIDAD ══════════════════════════════════
 const MIN_QUALITY = 'strong';  // 'elite' (85+) o 'strong' (70+)
-const MIN_SCORE_STRUCTURE = 70; // Mínimo score estructural
+const MIN_SCORE_STRUCTURE = 85; // Solo señales ELITE (subió de 70)
 const BEST_OF_CYCLE = true;    // Solo la señal #1 por escaneo
 
 // ── ML CLASSIFIER GLOBAL ─────────────────────────────────────────
@@ -112,12 +112,12 @@ function getSession() {
   const mxDate = new Date(mxStr);
   const h      = mxDate.getHours() + mxDate.getMinutes() / 60;
 
-  if (h >= 8  && h < 12) return { name: 'Manana', minScore: 7.0, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 12 && h < 14) return { name: 'Mediodia', minScore: 7.5, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 7.0, cooldownMs: 15 * 60 * 1000 };
-  if (h >= 18 && h < 20) return { name: 'Atardecer', minScore: 7.5, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 7.5, cooldownMs: 20 * 60 * 1000 };
-  if (h >= 0  && h < 8)  return { name: 'Madrugada', minScore: 8.0, cooldownMs: 20 * 60 * 1000 };
+  if (h >= 8  && h < 12) return { name: 'Manana', minScore: 8.5, cooldownMs: 4 * 60 * 60 * 1000 }; // 4 horas
+  if (h >= 12 && h < 14) return { name: 'Mediodia', minScore: 9.0, cooldownMs: 4 * 60 * 60 * 1000 };
+  if (h >= 14 && h < 18) return { name: 'Tarde',  minScore: 8.5, cooldownMs: 4 * 60 * 60 * 1000 };
+  if (h >= 18 && h < 20) return { name: 'Atardecer', minScore: 9.0, cooldownMs: 4 * 60 * 60 * 1000 };
+  if (h >= 20 && h < 24) return { name: 'Noche',  minScore: 9.0, cooldownMs: 4 * 60 * 60 * 1000 };
+  if (h >= 0  && h < 8)  return { name: 'Madrugada', minScore: 9.5, cooldownMs: 4 * 60 * 60 * 1000 };
   return null;
 }
 
@@ -562,7 +562,9 @@ async function runCycle(config) {
 
       if (STATE.agent.trained && entryCandles) {
         const agentDec = agentPredict(entryCandles, newsContext?.score || 0);
-        if (agentDec.action === 'SKIP') {
+
+        // Filtro de confianza mínima: solo trades con >75% confianza
+        if (agentDec.action === 'SKIP' || agentDec.confidence < 0.75) {
           STATE.agent.skipped++;
           console.log(`   [AGENT] ${sym} SKIP (${(agentDec.confidence * 100).toFixed(0)}%) — ${agentDec.riskLevel}`);
           continue;
@@ -751,7 +753,7 @@ export async function startScanner(config) {
   }
 
   runCycle(config);
-  setInterval(() => runCycle(config), 5 * 60 * 1000); // Cada 5 minutos (era 3)
+  setInterval(() => runCycle(config), 15 * 60 * 1000); // Cada 15 minutos (calidad > cantidad)
 
   // Re-optimizar cada 6 horas
   setInterval(() => autoOptimize(config).catch(e => console.error('[OPT] Error:', e.message)), OPT_RETRAIN_MS);
