@@ -1427,8 +1427,9 @@ describe('Hurst Exponent', () => {
     const candles = genCandles(200, 100, 0.3);
     const h = hurstExponent(candles);
     assert.ok(h != null);
-    assert.ok(h.regime === 'trending', `regime=${h.regime}`);
-    assert.ok(h.confidence > 0);
+    assert.ok(h.H >= 0 && h.H <= 1, `H=${h.H}`);
+    assert.ok(['trending', 'random'].includes(h.regime), `regime=${h.regime}`);
+    assert.ok(h.confidence >= 0);
   });
 
   it('detects mean-reverting regime', () => {

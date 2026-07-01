@@ -175,10 +175,11 @@ let candles = [];
 let drawings = [], dSHA = null;
 let activeTool = 'cursor', dipProg = null;
 let layers = { ew:true, fib:true, piv:true, fld:true, vpoc:true };
-let ewPats = []; // Todos los patrones detectados en múltiples escalas
+let ewPats = [];
 let fldAS = null, fldBS = null;
 let saveTimer = null;
 let ind = {};
+let cachedHurst = null;
 
 // ── AUTH — usa misma sesión que index.html ──────────────────────
 let sessionToken = null;
@@ -280,11 +281,11 @@ async function loadChart() {
   try {
     candles = await fetchCandles(curSym, curTF, 1000);
     cSeries.setData(candles.map(c=>({ time:c.time, open:c.open, high:c.high, low:c.low, close:c.close })));
-    calcIndicators();
-    runElliott();
+    try { calcIndicators(); } catch(_) {}
+    try { runElliott(); } catch(_) {}
     await loadDrawings();
-    redraw();
-    updateBar();
+    // Dejar que el chart renderice antes de dibujar overlays
+    requestAnimationFrame(() => { redraw(); updateBar(); });
     setSave('✓ Listo','ok');
   } catch(e) { setSave('Error: '+e.message,'err'); }
 }
@@ -334,8 +335,10 @@ function calcIndicators() {
   if (fldAS) { try{chart.removeSeries(fldAS)}catch(_){} fldAS=null; }
   if (fldBS) { try{chart.removeSeries(fldBS)}catch(_){} fldBS=null; }
   if (layers.fld) {
-    const hData = calcHurstExponent(candles);
-    const [fp1, fp2] = hData ? hData.periods : [20, 40];
+    try {
+      cachedHurst = calcHurstExponent(candles);
+    } catch(_) { cachedHurst = null; }
+    const [fp1, fp2] = cachedHurst ? cachedHurst.periods : [20, 40];
     const fA=calcFLD(candles,fp1), fB=calcFLD(candles,fp2);
     fldAS=chart.addLineSeries({color:'#06b6d4',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
     fldBS=chart.addLineSeries({color:'#9333ea',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
@@ -344,9 +347,9 @@ function calcIndicators() {
 
     // Update Hurst info display
     const ih = document.getElementById('IH');
-    if(ih && hData) {
-      ih.textContent = `H=${hData.H.toFixed(2)} ${hData.regime}`;
-      ih.className = `iv ${hData.regime === 'trending' ? 'up' : hData.regime === 'mean_reverting' ? 'dn' : 'neu'}`;
+    if(ih && cachedHurst) {
+      ih.textContent = `H=${cachedHurst.H.toFixed(2)} ${cachedHurst.regime}`;
+      ih.className = `iv ${cachedHurst.regime === 'trending' ? 'up' : cachedHurst.regime === 'mean_reverting' ? 'dn' : 'neu'}`;
     }
   }
 }
@@ -466,7 +469,7 @@ function runElliott() {
 }
 
 function findPatternInSwings(sw) {
-  const found = [];
+  let bestImpulse = null, bestCorrective = null;
   for(let i=0; i+4<sw.length; i++){
     const w = sw.slice(i, i+7);
     let alt=true;
@@ -476,7 +479,7 @@ function findPatternInSwings(sw) {
 
     const up = w[0].t==='L';
 
-    // ═══ IMPULSE WAVES ════════════════════════════════════════
+    // ═══ IMPULSE WAVES (PRIORIDAD MÁXIMA) ════════════════════════
     if(up && w.length>=5){
       const w1=w[1].p-w[0].p; if(w1<=0)continue;
       const w2r=(w[1].p-w[2].p)/w1; if(w2r<.18||w2r>.92)continue;
@@ -484,7 +487,10 @@ function findPatternInSwings(sw) {
       const w4r=(w[3].p-w[4].p)/w3; if(w4r<.10||w4r>.78)continue;
       if(w[4].p<=w[1].p)continue;
       const wn=w.length>=6?5:4;
-      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'up',type:'impulse',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p+w1*1.618,confidence:Math.min(1,(w3/w1+(1-w4r))/2)});
+      const conf=Math.min(1,(w3/w1+(1-w4r))/2);
+      if(!bestImpulse || conf>bestImpulse.confidence)
+        bestImpulse={pts:w.slice(0,Math.min(6,w.length)),dir:'up',type:'impulse',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p+w1*1.618,confidence:conf};
+      continue;
     }
     if(!up && w.length>=5){
       const w1=w[0].p-w[1].p; if(w1<=0)continue;
@@ -493,10 +499,15 @@ function findPatternInSwings(sw) {
       const w4r=(w[4].p-w[3].p)/w3; if(w4r<.10||w4r>.78)continue;
       if(w[4].p>=w[1].p)continue;
       const wn=w.length>=6?5:4;
-      found.push({pts:w.slice(0,Math.min(6,w.length)),dir:'dn',type:'impulse',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p-w1*1.618,confidence:Math.min(1,(w3/w1+(1-w4r))/2)});
+      const conf=Math.min(1,(w3/w1+(1-w4r))/2);
+      if(!bestImpulse || conf>bestImpulse.confidence)
+        bestImpulse={pts:w.slice(0,Math.min(6,w.length)),dir:'dn',type:'impulse',w1,w3,w2r,w4r,wn,w5tgt:w[w.length-1].p-w1*1.618,confidence:conf};
+      continue;
     }
 
-    // ═══ ZIGZAG CORRECTION ═══════════════════════════════════
+    // ═══ CORRECTIVE PATTERNS (solo si no hay impulse en esta posición) ═══
+
+    // Zigzag
     if(w.length>=3) {
       const w0=w[0], w1w=w[1], w2=w[2];
       if(w0.t==='L'&&w1w.t==='H'&&w2.t==='L') {
@@ -505,7 +516,9 @@ function findPatternInSwings(sw) {
         if(waveA>0) {
           const ratio=waveB/waveA;
           if(ratio>=0.382&&ratio<=0.786) {
-            found.push({pts:w.slice(0,3),dir:'dn',type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p-waveA*1.0,confidence:0.6+(ratio>0.5?0.2:0)});
+            const conf=0.6+(ratio>0.5?0.2:0);
+            if(!bestCorrective || conf>bestCorrective.confidence)
+              bestCorrective={pts:w.slice(0,3),dir:'dn',type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p-waveA*1.0,confidence:conf};
           }
         }
       }
@@ -515,33 +528,35 @@ function findPatternInSwings(sw) {
         if(waveA>0) {
           const ratio=waveB/waveA;
           if(ratio>=0.382&&ratio<=0.786) {
-            found.push({pts:w.slice(0,3),dir:'up',type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p+waveA*1.0,confidence:0.6+(ratio>0.5?0.2:0)});
+            const conf=0.6+(ratio>0.5?0.2:0);
+            if(!bestCorrective || conf>bestCorrective.confidence)
+              bestCorrective={pts:w.slice(0,3),dir:'up',type:'zigzag',waveA,waveB,bRatio:ratio,wn:3,w5tgt:w2.p+waveA*1.0,confidence:conf};
           }
         }
       }
     }
 
-    // ═══ FLAT CORRECTION ══════════════════════════════════════
-    if(w.length>=3) {
+    // Flat
+    if(w.length>=3 && !bestCorrective) {
       const w0=w[0], w1w=w[1], w2=w[2];
       if(w0.t==='L'&&w1w.t==='H'&&w2.t==='L') {
         const waveA=Math.abs(w0.p-w1w.p);
         const waveB=Math.abs(w2.p-w1w.p);
         if(waveA>0&&waveB/waveA>=0.90&&waveB/waveA<=1.05) {
-          found.push({pts:w.slice(0,3),dir:'up',type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p+waveA*1.2,confidence:0.55});
+          bestCorrective={pts:w.slice(0,3),dir:'up',type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p+waveA*1.2,confidence:0.55};
         }
       }
       if(w0.t==='H'&&w1w.t==='L'&&w2.t==='H') {
         const waveA=Math.abs(w0.p-w1w.p);
         const waveB=Math.abs(w2.p-w1w.p);
         if(waveA>0&&waveB/waveA>=0.90&&waveB/waveA<=1.05) {
-          found.push({pts:w.slice(0,3),dir:'dn',type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p-waveA*1.2,confidence:0.55});
+          bestCorrective={pts:w.slice(0,3),dir:'dn',type:'flat',waveA,waveB,bRatio:waveB/waveA,wn:3,w5tgt:w2.p-waveA*1.2,confidence:0.55};
         }
       }
     }
 
-    // ═══ TRIANGLE (5-wave A-B-C-D-E) ═════════════════════════
-    if(w.length>=5) {
+    // Triangle
+    if(w.length>=5 && !bestCorrective) {
       const isAlt = w.every((s,j)=>j===0||s.t!==w[j-1].t);
       if(isAlt) {
         const pcts=[];
@@ -555,13 +570,14 @@ function findPatternInSwings(sw) {
           for(let j=1;j<pcts.length;j++){if(pcts[j]>=pcts[j-1]){valid=false;break;}}
           if(valid&&pcts[0]<1) {
             const isAscending=w[0].p>w[2].p;
-            found.push({pts:w.slice(0,5),dir:isAscending?'up':'dn',type:'triangle',convergences:pcts,wn:5,w5tgt:w[4].p+(isAscending?1:-1)*Math.abs(w[0].p-w[4].p)*0.5,confidence:0.5+(1-pcts[pcts.length-1])*0.3});
+            bestCorrective={pts:w.slice(0,5),dir:isAscending?'up':'dn',type:'triangle',convergences:pcts,wn:5,w5tgt:w[4].p+(isAscending?1:-1)*Math.abs(w[0].p-w[4].p)*0.5,confidence:0.5+(1-pcts[pcts.length-1])*0.3};
           }
         }
       }
     }
   }
-  return found.length ? found[found.length-1] : null;
+  // Prioridad: impulse > corrective
+  return bestImpulse || bestCorrective || null;
 }
 
 function updateEWBadge() {
@@ -589,13 +605,13 @@ function redraw() {
   const ctx=dc.getContext('2d');
   ctx.clearRect(0,0,dc.width,dc.height);
   if(!candles.length)return;
-  if(layers.fib  && ind.fib)  drawFibs(ctx,ind.fib);
-  if(layers.piv  && ind.piv)  drawPivs(ctx,ind.piv);
-  if(layers.vpoc && ind.vpoc) drawVPOC(ctx,ind.vpoc);
-  if(layers.ew && ewPats.length) ewPats.forEach(p => drawEW(ctx, p));
-  drawHurstPanel(ctx);
-  drawings.forEach(d=>drawShape(ctx,d));
-  if(dipProg) drawShape(ctx,dipProg,true);
+  try{ if(layers.fib  && ind.fib)  drawFibs(ctx,ind.fib); }catch(_){}
+  try{ if(layers.piv  && ind.piv)  drawPivs(ctx,ind.piv); }catch(_){}
+  try{ if(layers.vpoc && ind.vpoc) drawVPOC(ctx,ind.vpoc); }catch(_){}
+  try{ if(layers.ew && ewPats.length) ewPats.forEach(p => drawEW(ctx, p)); }catch(_){}
+  try{ drawHurstPanel(ctx); }catch(_){}
+  try{ drawings.forEach(d=>drawShape(ctx,d)); }catch(_){}
+  if(dipProg) try{ drawShape(ctx,dipProg,true); }catch(_){}
 }
 
 // ── CANVAS — ELLIOTT WAVE (TODOS LOS GRADOS) ──────────────────────
@@ -755,7 +771,7 @@ function drawVPOC(ctx,vpoc){
 // ── CANVAS — HURST PANEL ────────────────────────────────────────────
 function drawHurstPanel(ctx) {
   if(!candles||candles.length<40) return;
-  const hData = calcHurstExponent(candles);
+  const hData = cachedHurst;
   if(!hData) return;
   const dc=document.getElementById('DC');
   const bx=dc.width-195,by=8,bw=185,bh=68;
