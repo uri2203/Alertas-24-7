@@ -6,6 +6,8 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { liveLearn } from './agent.js';
+import { closeTrade } from './journal.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR  = join(__dirname, '..', 'data');
@@ -35,7 +37,7 @@ function writeSignals(signals) {
 }
 
 // ── REGISTRAR SEÑAL ENVIADA ───────────────────────────────────────
-export async function trackSignal(sym, tf, sig, isDivergence = false) {
+export async function trackSignal(sym, tf, sig, isDivergence = false, extra = {}) {
   const signals = readSignals();
   const record  = {
     id:           `${sym}-${tf}-${Date.now()}`,
@@ -61,6 +63,9 @@ export async function trackSignal(sym, tf, sig, isDivergence = false) {
     price4h:      null,
     price24h:     null,
     evaluated:    false,
+    journalId:    extra.journalId || null,
+    newsScore:    extra.newsScore || 0,
+    candles:      extra.candles || null,
   };
 
   signals.unshift(record);
@@ -92,15 +97,46 @@ export async function evaluatePending(fetchCandlesFn) {
     const calcResult = (ref, cur) =>
       (!ref || !cur) ? null : (isLong ? cur > ref : cur < ref) ? 'WIN' : 'LOSS';
 
-    if (!rec.result1h  && elapsed >= 1  * 60 * 60 * 1000) { rec.price1h  = currentPrice; rec.result1h  = calcResult(rec.entryPrice, currentPrice); modified = true; }
-    if (!rec.result4h  && elapsed >= 4  * 60 * 60 * 1000) { rec.price4h  = currentPrice; rec.result4h  = calcResult(rec.entryPrice, currentPrice); modified = true; }
-    if (!rec.result24h && elapsed >= 24 * 60 * 60 * 1000) { rec.price24h = currentPrice; rec.result24h = calcResult(rec.entryPrice, currentPrice); rec.evaluated = true; modified = true; }
+    if (!rec.result1h  && elapsed >= 1  * 60 * 60 * 1000) { rec.price1h  = currentPrice; rec.result1h  = calcResult(rec.entryPrice, currentPrice); modified = true; triggerLiveLearn(rec, '1h'); }
+    if (!rec.result4h  && elapsed >= 4  * 60 * 60 * 1000) { rec.price4h  = currentPrice; rec.result4h  = calcResult(rec.entryPrice, currentPrice); modified = true; triggerLiveLearn(rec, '4h'); }
+    if (!rec.result24h && elapsed >= 24 * 60 * 60 * 1000) { rec.price24h = currentPrice; rec.result24h = calcResult(rec.entryPrice, currentPrice); rec.evaluated = true; modified = true; triggerLiveLearn(rec, '24h'); }
   }
 
   if (modified) {
     writeSignals(signals);
     console.log(`[TRACKER] 📊 Resultados actualizados.`);
   }
+}
+
+// ── LIVE LEARNING + JOURNAL HOOK ────────────────────────────────
+function triggerLiveLearn(rec, timeframe) {
+  const result = rec[`result${timeframe}`];
+  if (!result) return;
+
+  const pnl = rec.entryPrice ? ((rec[`price${timeframe}`] - rec.entryPrice) / rec.entryPrice * (rec.signal === 'LONG' ? 1 : -1)) : 0;
+
+  // Live Learning: actualizar Q-table con resultado real
+  try {
+    liveLearn({
+      candles: rec.candles || [],
+      direction: rec.signal,
+      entryPrice: rec.entryPrice,
+      exitPrice: rec[`price${timeframe}`],
+      result,
+      newsScore: rec.newsScore || 0,
+    });
+  } catch (_) {}
+
+  // Trade Journal: cerrar trade con resultado
+  try {
+    if (rec.journalId) {
+      closeTrade(rec.journalId, {
+        exitPrice: rec[`price${timeframe}`],
+        exitTime: new Date().toISOString(),
+        exitReason: `evaluated_${timeframe}`,
+      });
+    }
+  } catch (_) {}
 }
 
 // ── ESTADÍSTICAS ──────────────────────────────────────────────────

@@ -704,7 +704,11 @@ async function runCycle(config) {
     }
 
     // Track
-    trackSignal(sym, entryTF, direction, sig.score, candles);
+    trackSignal(sym, entryTF, sig, false, {
+      journalId: journalEntry?.id || null,
+      newsScore: newsContext?.score || 0,
+      candles: entryCandles || null,
+    });
 
     // ═══ TRADE JOURNAL: Registrar trade ═════════════════════════
     const journalEntry = logTrade({

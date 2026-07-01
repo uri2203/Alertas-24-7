@@ -24,6 +24,8 @@ import { backtestRouter }  from './routes/backtest.js';
 import { optimizerRouter } from './routes/optimizer.js';
 import { agentRouter } from './routes/agent.js';
 import { startScanner } from './engine/scanner.js';
+import { getJournalStats, getRecentTrades, getErrorAnalysis, getLessonsLearned, exportJournal } from './engine/journal.js';
+import { getPortfolioSummary, checkEmergencyStop } from './engine/portfolio.js';
 
 if (!process.env.DASHBOARD_PASSWORD) {
   console.error('FATAL: DASHBOARD_PASSWORD must be set in .env');
@@ -132,6 +134,34 @@ app.use('/api/drawings',  requireAuth, drawingsRouter());
 app.use('/api/backtest',  requireAuth, backtestRouter());
   app.use('/api/optimizer', requireAuth, optimizerRouter());
   app.use('/api/agent',    requireAuth, agentRouter());
+
+// ── JOURNAL API ─────────────────────────────────────────────
+app.get('/api/journal', requireAuth, (req, res) => {
+  try {
+    const stats = getJournalStats();
+    const recent = getRecentTrades(10);
+    const errors = getErrorAnalysis();
+    const lessons = getLessonsLearned();
+    res.json({ ok: true, stats, recent, errors, lessons });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/journal/export', requireAuth, (req, res) => {
+  try {
+    const data = exportJournal();
+    res.setHeader('Content-Disposition', 'attachment; filename=trade-journal.json');
+    res.json(data);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ── PORTFOLIO API ───────────────────────────────────────────
+app.get('/api/portfolio', requireAuth, (req, res) => {
+  try {
+    const summary = getPortfolioSummary();
+    const emergency = checkEmergencyStop();
+    res.json({ ok: true, summary, emergency });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
 
 // ── STATIC FILES ───────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));

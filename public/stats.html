@@ -147,6 +147,24 @@
   <div class="bt-status" id="AGENT-STATUS"></div>
 </div>
 
+<!-- TRADE JOURNAL PANEL -->
+<div class="bt-panel" style="border-color:#3b82f6">
+  <h3 style="color:#3b82f6">📒 Trade Journal — Diario de Trading</h3>
+  <div id="JOURNAL-INFO">Cargando...</div>
+  <div class="bt-row">
+    <button class="bt-btn" onclick="loadJournal()" style="background:#3b82f6;color:#fff">↺ Actualizar</button>
+    <button class="bt-btn" onclick="exportJournal()" style="background:#8b5cf6;color:#fff">📥 Exportar</button>
+  </div>
+  <div class="bt-status" id="JOURNAL-STATUS"></div>
+</div>
+
+<!-- PORTFOLIO RISK PANEL -->
+<div class="bt-panel" style="border-color:#f59e0b">
+  <h3 style="color:#f59e0b">🛡️ Portfolio Risk — Gestión de Riesgo</h3>
+  <div id="PORTFOLIO-INFO">Cargando...</div>
+  <div class="bt-status" id="PORTFOLIO-STATUS"></div>
+</div>
+
 <div id="CONTENT"><div class="loading">Cargando estadísticas...</div></div>
 <div id="BT-RESULTS"></div>
 </div><!-- /MAIN-CONTENT -->
@@ -922,12 +940,176 @@ async function agentReset() {
   } catch (e) { st.textContent = '❌ ' + e.message; }
 }
 
+// ── TRADE JOURNAL ────────────────────────────────────────────────
+async function loadJournal() {
+  const el = document.getElementById('JOURNAL-INFO');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">Cargando journal...</div>';
+  try {
+    const r = await fetch('/api/journal', { headers: authHeaders() });
+    const d = await r.json();
+    if (!d.ok) { el.innerHTML = '<div class="loading">Sin datos de journal</div>'; return; }
+
+    const s = d.stats;
+    const recent = d.recent || [];
+    const lessons = d.lessons || {};
+    const errors = d.errors || {};
+
+    el.innerHTML = `
+      <!-- Stats principales -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card" style="border-left:3px solid #3b82f6">
+          <div class="stat-val">${s.totalTrades}</div>
+          <div class="stat-label">Total Trades</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid #10b981">
+          <div class="stat-val" style="color:#10b981">${s.winRate || 0}%</div>
+          <div class="stat-label">Win Rate</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid ${s.totalPnL >= 0 ? '#10b981' : '#ef4444'}">
+          <div class="stat-val ${s.totalPnL >= 0 ? 'pnl-pos' : 'pnl-neg'}">${s.totalPnL >= 0 ? '+' : ''}${s.totalPnL || 0}%</div>
+          <div class="stat-label">P&L Total</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid #8b5cf6">
+          <div class="stat-val">${s.avgPnL || 0}%</div>
+          <div class="stat-label">P&L Promedio</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid #f59e0b">
+          <div class="stat-val">${s.wins || 0}W / ${s.losses || 0}L</div>
+          <div class="stat-label">Wins / Losses</div>
+        </div>
+      </div>
+
+      <!-- Grade Distribution -->
+      <div style="margin:12px 0 8px;color:#8b5cf6;font-weight:bold">🏅 Distribución de Grados</div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:8px 0">
+        ${['A','B','C','D','F'].map(g => `
+          <div class="stat-card">
+            <div class="stat-val" style="color:${g==='A'?'#10b981':g==='B'?'#3b82f6':g==='C'?'#f59e0b':g==='D'?'#fb923c':'#ef4444'}">${(s.gradeDistribution||{})[g]||0}</div>
+            <div class="stat-label">Grado ${g}</div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Últimos 5 trades -->
+      <div style="margin:12px 0 8px;color:#3b82f6;font-weight:bold">📋 Últimos Trades</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead>
+            <tr style="color:#64748b;border-bottom:1px solid #1e293b">
+              <th style="text-align:left;padding:4px 8px">Sym</th>
+              <th style="text-align:left;padding:4px 8px">Dir</th>
+              <th style="text-align:left;padding:4px 8px">Score</th>
+              <th style="text-align:left;padding:4px 8px">P&L</th>
+              <th style="text-align:left;padding:4px 8px">Grade</th>
+              <th style="text-align:left;padding:4px 8px">Resultado</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${recent.slice(0, 10).map(t => `
+              <tr style="border-bottom:1px solid #1e293b;color:#94a3b8">
+                <td style="padding:4px 8px;color:#e2e8f0">${t.sym}</td>
+                <td style="padding:4px 8px;color:${t.direction==='LONG'?'#10b981':'#ef4444'}">${t.direction}</td>
+                <td style="padding:4px 8px">${t.score||0}</td>
+                <td style="padding:4px 8px;color:${(t.pnlPct||0)>=0?'#10b981':'#ef4444'}">${t.pnlPct!=null?(t.pnlPct>=0?'+':'')+t.pnlPct.toFixed(1)+'%':'Pendiente'}</td>
+                <td style="padding:4px 8px;color:${t.grade==='A'?'#10b981':t.grade==='B'?'#3b82f6':t.grade==='C'?'#f59e0b':t.grade==='D'?'#fb923c':'#ef4444'};font-weight:bold">${t.grade||'—'}</td>
+                <td style="padding:4px 8px">${t.result===null?'⏳':t.result==='WIN'?'✅ WIN':'❌ LOSS'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      ${errors.totalLosses > 0 ? `
+      <div style="margin:12px 0 8px;color:#ef4444;font-weight:bold">🔍 Errores Frecuentes</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0">
+        ${Object.entries(errors.errorPatterns||{}).slice(0,3).map(([k,v]) => `
+          <div class="stat-card">
+            <div class="stat-val" style="color:#ef4444;font-size:12px">${k}</div>
+            <div class="stat-label">${v} veces</div>
+          </div>
+        `).join('')}
+      </div>` : ''}
+    `;
+  } catch (e) { el.innerHTML = `<div class="loading">Error: ${e.message}</div>`; }
+}
+
+function exportJournal() {
+  window.open('/api/journal/export', '_blank');
+}
+
+// ── PORTFOLIO RISK ────────────────────────────────────────────────
+async function loadPortfolio() {
+  const el = document.getElementById('PORTFOLIO-INFO');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">Cargando portfolio...</div>';
+  try {
+    const r = await fetch('/api/portfolio', { headers: authHeaders() });
+    const d = await r.json();
+    if (!d.ok) { el.innerHTML = '<div class="loading">Sin datos de portfolio</div>'; return; }
+
+    const s = d.summary;
+    const emergency = d.emergency;
+
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card" style="border-left:3px solid #3b82f6">
+          <div class="stat-val">${s.openPositions}</div>
+          <div class="stat-label">Posiciones Abiertas</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid #10b981">
+          <div class="stat-val">${s.dailyTrades}</div>
+          <div class="stat-label">Trades Hoy</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid ${s.dailyPnL >= 0 ? '#10b981' : '#ef4444'}">
+          <div class="stat-val ${s.dailyPnL >= 0 ? 'pnl-pos' : 'pnl-neg'}">${s.dailyPnL >= 0 ? '+' : ''}${(s.dailyPnL || 0).toFixed(2)}%</div>
+          <div class="stat-label">P&L Diario</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid #f59e0b">
+          <div class="stat-val">${s.consecutiveLosses}</div>
+          <div class="stat-label">Pérdidas Consecutivas</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0">
+        <div class="stat-card">
+          <div class="stat-val" style="color:#3b82f6">${s.exposure?.LONG || 0}%</div>
+          <div class="stat-label">Exposición LONG</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:#ef4444">${s.exposure?.SHORT || 0}%</div>
+          <div class="stat-label">Exposición SHORT</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val">${s.currentEquity ? '$'+s.currentEquity.toLocaleString() : '—'}</div>
+          <div class="stat-label">Equity Actual</div>
+        </div>
+      </div>
+
+      ${emergency.shouldStop ? `
+      <div style="background:#7f1d1d;border:1px solid #ef4444;border-radius:8px;padding:12px;margin:8px 0">
+        <div style="color:#ef4444;font-weight:bold">🚨 EMERGENCY STOP ACTIVO</div>
+        ${emergency.reasons.map(r => `<div style="color:#fca5a5;font-size:12px;margin:4px 0">• ${r.type}: ${r.message}</div>`).join('')}
+      </div>
+      ` : `
+      <div style="background:#064e3b;border:1px solid #10b981;border-radius:8px;padding:8px;margin:8px 0;color:#10b981;text-align:center">
+        ✅ Sistema operando normalmente — Sin restricciones activas
+      </div>
+      `}
+    `;
+  } catch (e) { el.innerHTML = `<div class="loading">Error: ${e.message}</div>`; }
+}
+
 // ── INIT ────────────────────────────────────────────────────────
 function init() {
   load();
   loadAgentStats();
+  loadJournal();
+  loadPortfolio();
   setInterval(load, 60000);
   setInterval(loadAgentStats, 60000);
+  setInterval(loadJournal, 60000);
+  setInterval(loadPortfolio, 60000);
 }
 
 // ── STARTUP ─────────────────────────────────────────────────────
