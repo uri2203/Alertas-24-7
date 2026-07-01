@@ -273,6 +273,9 @@ import { openPosition, closePosition, checkBreakeven, checkTrailingStop, checkPa
 import { analyzeFundingRate, analyzeOpenInterest, analyzeLongShortRatio, fundingScore } from './funding.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 import { detectNews, NEWS_REWARDS, newsPositionSize, newsSLTPAdjustment } from './news.js';
+import { checkPortfolioRisk, registerPosition, registerPositionClose, checkEmergencyStop, getPortfolioSummary, resetPortfolio } from './portfolio.js';
+import { logTrade, closeTrade, getJournalStats, getRecentTrades, getErrorAnalysis, getLessonsLearned } from './journal.js';
+import { liveLearn, liveLearnSkip, getAgentLiveStatus } from './agent.js';
 
 // ── RISK MODULE ──────────────────────────────────────────────────
 describe('Risk Management', () => {
@@ -1257,5 +1260,146 @@ describe('News Detection', () => {
     const moderate = newsSLTPAdjustment(40, 0.02, 'LONG');
     assert.ok(moderate);
     assert.equal(moderate.reason, 'MODERATE_NEWS');
+  });
+});
+
+// ── PORTFOLIO RISK ───────────────────────────────────────────
+describe('Portfolio Risk', () => {
+  it('checkPortfolioRisk returns allowed for normal trade', () => {
+    resetPortfolio();
+    // equity=10000, so 0.01*100 = 1 -> exposure = 1/10000*100 = 0.01%
+    const result = checkPortfolioRisk('BTCUSDT', 'LONG', 0.01, 100);
+    assert.ok(result.allowed);
+    assert.ok(Array.isArray(result.risks));
+  });
+
+  it('checkPortfolioRisk detects max daily trades', () => {
+    resetPortfolio();
+    for (let i = 0; i < 10; i++) registerPosition(`PFMAX${i}`, 'LONG', 0.01, 100);
+    const result = checkPortfolioRisk('PFMAX11', 'LONG', 0.01, 100);
+    assert.equal(result.allowed, false);
+    assert.ok(result.risks.some(r => r.type === 'DAILY_TRADE_LIMIT'));
+  });
+
+  it('checkPortfolioRisk detects consecutive losses', () => {
+    resetPortfolio();
+    for (let i = 0; i < 3; i++) registerPosition(`PFLOSS${i}`, 'LONG', 0.01, 100);
+    for (let i = 0; i < 3; i++) registerPositionClose(`PFLOSS${i}`, 90, -1);
+    const result = checkPortfolioRisk('PFLOSS4', 'LONG', 0.01, 100);
+    assert.equal(result.allowed, false);
+    assert.ok(result.risks.some(r => r.type === 'CONSECUTIVE_LOSSES'));
+  });
+
+  it('getPortfolioSummary returns stats', () => {
+    resetPortfolio();
+    registerPosition('PFSUM', 'LONG', 0.01, 100);
+    const summary = getPortfolioSummary();
+    assert.ok(summary.openPositions >= 1);
+    assert.ok(summary.dailyTrades >= 1);
+  });
+
+  it('checkEmergencyStop returns no stop when healthy', () => {
+    resetPortfolio();
+    const result = checkEmergencyStop();
+    assert.equal(result.shouldStop, false);
+    assert.equal(result.reasons.length, 0);
+  });
+});
+
+// ── TRADE JOURNAL ────────────────────────────────────────────
+describe('Trade Journal', () => {
+  it('logTrade creates entry', () => {
+    const entry = logTrade({
+      sym: 'JNLBTC', tf: '1h', direction: 'LONG', entryPrice: 100000,
+      entryTime: new Date().toISOString(), score: 90, quality: 'ELITE'
+    });
+    assert.ok(entry.id);
+    assert.ok(entry.timestamp);
+    assert.equal(entry.grade, null);
+  });
+
+  it('closeTrade calculates P&L for LONG', () => {
+    const entry = logTrade({ sym: 'JNLBTC2', tf: '1h', direction: 'LONG', entryPrice: 100, entryTime: new Date().toISOString() });
+    closeTrade(entry.id, { exitPrice: 110, exitTime: new Date().toISOString(), exitReason: 'tp' });
+    const stats = getJournalStats();
+    assert.ok(stats.totalTrades >= 1);
+    assert.ok(stats.totalPnL > 0);
+  });
+
+  it('closeTrade calculates P&L for SHORT', () => {
+    const entry = logTrade({ sym: 'JNLSHT', tf: '1h', direction: 'SHORT', entryPrice: 100, entryTime: new Date().toISOString() });
+    closeTrade(entry.id, { exitPrice: 90, exitTime: new Date().toISOString(), exitReason: 'tp' });
+    const stats = getJournalStats();
+    assert.ok(stats.totalPnL > 0);
+  });
+
+  it('getJournalStats returns win rate', () => {
+    const e1 = logTrade({ sym: 'JNLWIN1', tf: '1h', direction: 'LONG', entryPrice: 100, entryTime: new Date().toISOString() });
+    const e2 = logTrade({ sym: 'JNLWIN2', tf: '1h', direction: 'LONG', entryPrice: 100, entryTime: new Date().toISOString() });
+    closeTrade(e1.id, { exitPrice: 110, exitReason: 'tp' });
+    closeTrade(e2.id, { exitPrice: 90, exitReason: 'sl' });
+    const stats = getJournalStats();
+    assert.ok(stats.totalTrades >= 2);
+    assert.equal(typeof stats.winRate, 'number');
+  });
+
+  it('getErrorAnalysis returns analysis', () => {
+    const analysis = getErrorAnalysis();
+    assert.equal(typeof analysis.totalLosses, 'number');
+    assert.equal(typeof analysis.errorPatterns, 'object');
+  });
+
+  it('getLessonsLearned returns lessons', () => {
+    const lessons = getLessonsLearned();
+    assert.equal(typeof lessons.totalWins, 'number');
+    assert.equal(typeof lessons.lessons, 'object');
+  });
+
+  it('getRecentTrades returns recent trades', () => {
+    const recent = getRecentTrades(5);
+    assert.ok(Array.isArray(recent));
+  });
+});
+
+// ── LIVE LEARNING ────────────────────────────────────────────
+describe('Live Learning', () => {
+  it('liveLearn updates Q-table', () => {
+    const candles = Array.from({length: 210}, (_, i) => ({
+      open: 100 + Math.sin(i * 0.05) * 5,
+      high: 105 + Math.sin(i * 0.05) * 5,
+      low: 95 + Math.sin(i * 0.05) * 5,
+      close: 100 + Math.sin(i * 0.05) * 5,
+      volume: 1000 + Math.random() * 500,
+      time: i
+    }));
+    const result = liveLearn({ candles, direction: 'LONG', entryPrice: 100, exitPrice: 115, result: 'WIN', newsScore: 0 });
+    assert.ok(result);
+    assert.ok(typeof result.state === 'number');
+    assert.ok(typeof result.reward === 'number');
+    assert.ok(result.won === true);
+  });
+
+  it('liveLearnSkip updates skip stats', () => {
+    const candles = Array.from({length: 210}, (_, i) => ({
+      open: 100 + Math.sin(i * 0.05) * 5,
+      high: 105 + Math.sin(i * 0.05) * 5,
+      low: 95 + Math.sin(i * 0.05) * 5,
+      close: 100 + Math.sin(i * 0.05) * 5,
+      volume: 1000 + Math.random() * 500,
+      time: i
+    }));
+    const result = liveLearnSkip({ candles, actualPnl: 0.05, actualResult: 'WIN', newsScore: 0 });
+    assert.ok(result);
+    assert.ok(typeof result.state === 'number');
+    assert.ok(typeof result.reward === 'number');
+    assert.ok(result.missed === true);
+  });
+
+  it('getAgentLiveStatus returns live stats', () => {
+    const status = getAgentLiveStatus();
+    assert.ok(typeof status.isLiveLearning === 'boolean');
+    assert.ok(typeof status.totalLiveUpdates === 'number');
+    assert.ok(Array.isArray(status.recentRewards));
+    assert.ok(typeof status.avgRecentReward === 'number');
   });
 });

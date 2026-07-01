@@ -10,11 +10,13 @@ import { detectRegime, regimeScoreAdjustment } from './regime.js';
 import { extractFeatures, LogisticClassifier } from './ml.js';
 import { calcPositionSize, kellyFraction } from './risk.js';
 import { geneticOptimize } from './optimizer.js';
-import { agentPredict, trainFromHistory, trainOnWinners, trainOnNews, getAgentStats, exportQTable, importQTable } from './agent.js';
+import { agentPredict, trainFromHistory, trainOnWinners, trainOnNews, getAgentStats, exportQTable, importQTable, liveLearn, getAgentLiveStatus } from './agent.js';
 import { analyzeMultiTF, complementaryIndicators, structureScore } from './confluence.js';
 import { checkSpread, checkTimeFilter, multiTFBlockConfluence, checkInvalidation, getDynamicMinScore } from './structure.js';
 import { analyzeCorrelation } from './correlation.js';
 import { canOpenPosition, managePosition, getPositionStats } from './position.js';
+import { checkPortfolioRisk, registerPosition, registerPositionClose, checkEmergencyStop, getPortfolioSummary, resetDaily } from './portfolio.js';
+import { logTrade, closeTrade, getJournalStats, getRecentTrades } from './journal.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -417,7 +419,28 @@ async function runCycle(config) {
   STATE.scanCount++;
   STATE.lastScan = new Date().toISOString();
 
-  console.log(`\n[SCAN #${STATE.scanCount}] Sesion: ${session.name} | Calidad>=${MIN_SCORE_STRUCTURE}/100 | ML: ${STATE.ml.trained ? 'ON' : 'OFF'}`);
+  // ═══ EMERGENCY STOP ════════════════════════════════════════════
+  const emergency = checkEmergencyStop();
+  if (emergency.shouldStop) {
+    console.log(`\n[EMERGENCY] SISTEMA PAUSADO:`);
+    emergency.reasons.forEach(r => console.log(`   ❌ ${r.type}: ${r.message}`));
+    STATE.isScanning = false;
+    return;
+  }
+
+  // ═══ UMBRAL ADAPTATIVO ═════════════════════════════════════════
+  // Ajustar MIN_SCORE según win rate reciente
+  const journalStats = getJournalStats();
+  let adaptiveMinScore = MIN_SCORE_STRUCTURE;
+  if (journalStats.totalTrades >= 10) {
+    if (journalStats.winRate >= 70) {
+      adaptiveMinScore = Math.max(80, MIN_SCORE_STRUCTURE - 5); // Más agresivo si gana
+    } else if (journalStats.winRate < 50) {
+      adaptiveMinScore = Math.min(95, MIN_SCORE_STRUCTURE + 5); // Más conservador si pierde
+    }
+  }
+
+  console.log(`\n[SCAN #${STATE.scanCount}] Sesion: ${session.name} | Calidad>=${adaptiveMinScore}/100 | ML: ${STATE.ml.trained ? 'ON' : 'OFF'} | WinRate: ${journalStats.winRate || 0}%`);
 
   const activeThisCycle = new Set();
   sentThisCycle.clear();
@@ -460,7 +483,7 @@ async function runCycle(config) {
       }
 
       // ═══ FILTRO 3: DYNAMIC SCORE (volatilidad) ════════════════
-      const dynamicScore = getDynamicMinScore(MIN_SCORE_STRUCTURE, candlesByTF[entryTF]);
+      const dynamicScore = getDynamicMinScore(adaptiveMinScore, candlesByTF[entryTF]);
 
       // ═══ ANÁLISIS DE ESTRUCTURA MULTI-TF ═══════════════════════
       const multiTF = analyzeMultiTF(candlesByTF);
@@ -574,6 +597,22 @@ async function runCycle(config) {
         console.log(`   [AGENT] ${sym} TRADE — confidence: ${(agentDec.confidence * 100).toFixed(0)}% | sizing: ${agentDec.sizing.label} (${agentDec.sizing.multiplier}x) | ${agentDec.riskLevel}`);
       }
 
+      // ═══ FILTRO PORTFOLIO: Verificar riesgo total ═══════════════
+      const agentConfidence = agentSizing ? (agentSizing.multiplier / 3) : 0.5;
+      const portfolioRisk = checkPortfolioRisk(
+        sym,
+        structResult.direction,
+        agentSizing?.multiplier || 1,
+        STATE.prices[sym] || 0
+      );
+
+      if (!portfolioRisk.allowed) {
+        portfolioRisk.risks.forEach(r => {
+          console.log(`   [PORTFOLIO] ${sym} — ${r.type}: ${r.message}`);
+        });
+        continue;
+      }
+
       // ═══ CANDIDATO VÁLIDO ═════════════════════════════════════
       candidates.push({
         sym,
@@ -587,6 +626,7 @@ async function runCycle(config) {
         candles: entryCandles,
         agentSizing,
         newsContext,
+        agentConfidence,
       });
 
       console.log(`   [STRUCT] ${sym} ${structResult.direction} ${structResult.score}/100 (${structResult.quality}) — ${structResult.reasons.join(', ')}${obConfluence?.isStrong ? ' [OB CONFLUENCE]' : ''}`);
@@ -665,6 +705,28 @@ async function runCycle(config) {
 
     // Track
     trackSignal(sym, entryTF, direction, sig.score, candles);
+
+    // ═══ TRADE JOURNAL: Registrar trade ═════════════════════════
+    const journalEntry = logTrade({
+      sym,
+      tf: entryTF,
+      direction,
+      entryPrice: STATE.prices[sym] || 0,
+      entryTime: new Date().toISOString(),
+      reasons: reasons.slice(0, 5),
+      score,
+      quality,
+      newsScore: newsContext?.score || 0,
+      agentConfidence: cand.agentConfidence || 0,
+      regime: regime?.regime || 'unknown',
+      stopLoss: sig.sl,
+      takeProfit: sig.t1,
+      positionSize: agentSizing?.multiplier || 1,
+      riskReward: sig.rr,
+    });
+
+    // ═══ PORTFOLIO: Registrar posición ══════════════════════════
+    registerPosition(sym, direction, agentSizing?.multiplier || 1, STATE.prices[sym] || 0);
 
     // Cooldown
     const cdKey = `${sym}-${direction}`;

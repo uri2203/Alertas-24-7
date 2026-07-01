@@ -619,6 +619,82 @@ export function importQTable(data) {
   if (data.winHistory) winHistory = data.winHistory;
 }
 
+// ── LIVE LEARNING: APRENDER DE TRADES REALES ───────────────────
+// "Un tiburón de élite aprende de CADA presa, no solo del pasado"
+export function liveLearn(tradeResult) {
+  if (!tradeResult || !tradeResult.candles || tradeResult.candles.length < 200) return null;
+
+  const { candles, direction, entryPrice, exitPrice, result, newsScore } = tradeResult;
+  const won = result === 'WIN';
+  const pnl = (exitPrice - entryPrice) / entryPrice * (direction === 'LONG' ? 1 : -1);
+
+  // Obtener estado en el momento de entrada
+  const state = marketToState(candles);
+
+  // Simular que el agente tomó la decisión
+  const action = 1; // Se operó
+
+  // Calcular recompensa basada en el resultado real
+  const newsContext = newsScore >= 25 ? { score: newsScore, isFade: false, direction: direction === 'LONG' ? 'BULLISH' : 'BEARISH' } : null;
+  const reward = calcReward(won, pnl, 1, newsContext);
+
+  // Actualizar Q-table con el resultado real
+  // Usar el mismo estado como next state (simplificación para live learning)
+  updateQ(state, action, reward, state);
+
+  // Actualizar estadísticas
+  learningStats.totalDecisions++;
+  learningStats.tradesDecided++;
+  if (won) {
+    learningStats.correctTrades++;
+    if (Math.abs(pnl) >= 0.03) learningStats.bigWins++;
+    if (newsScore >= 25) learningStats.newsWins++;
+  } else {
+    if (Math.abs(pnl) >= 0.03) learningStats.bigLosses++;
+  }
+
+  totalReward += reward;
+  winHistory.push(reward);
+  episodeCount++;
+
+  return {
+    state,
+    reward: +reward.toFixed(4),
+    won,
+    pnl: +(pnl * 100).toFixed(2),
+    newQValue: +qTable[state * 2 + 1].toFixed(4),
+  };
+}
+
+// ── LIVE LEARNING: APRENDER DE SKIP (oportunidad perdida) ──────
+export function liveLearnSkip(skipResult) {
+  if (!skipResult || !skipResult.candles || skipResult.candles.length < 200) return null;
+
+  const { candles, actualPnl, actualResult, newsScore } = skipResult;
+  const state = marketToState(candles);
+
+  // Si el trade que se perdió habría ganado, penalizar
+  const skipReward = calcSkipReward(actualResult === 'WIN', actualPnl, newsScore || 0);
+
+  updateQ(state, 0, skipReward, state);
+
+  return {
+    state,
+    reward: +skipReward.toFixed(4),
+    missed: actualResult === 'WIN',
+  };
+}
+
+// ── OBTENER ESTADO DEL AGENTE PARA LIVE LEARNING ───────────────
+export function getAgentLiveStatus() {
+  return {
+    isLiveLearning: true,
+    totalLiveUpdates: episodeCount,
+    recentRewards: winHistory.slice(-10),
+    avgRecentReward: winHistory.slice(-10).reduce((a, b) => a + b, 0) / Math.max(1, winHistory.slice(-10).length),
+  };
+}
+
 // ── RESET ───────────────────────────────────────────────────────
 export function resetAgent() {
   qTable = new Float64Array(NUM_STATES * ACTIONS.length);
